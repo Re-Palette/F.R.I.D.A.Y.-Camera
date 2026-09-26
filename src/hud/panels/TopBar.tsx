@@ -60,6 +60,20 @@ export function AIStatus({ compact = false }: { compact?: boolean }) {
   );
 }
 
+/** Gemini Live connection state (vision = LIVE). Tap → SYSTEM. */
+function GeminiChip() {
+  const orch = useOrch();
+  const live = useFriday((s) => s.live);
+  if (!live) return null;
+  const label = { open: live.mic ? 'GEMINI · MIC' : 'GEMINI LIVE', connecting: 'GEMINI …', reconnecting: 'GEMINI …', error: 'GEMINI ✕', closed: 'GEMINI ✕', idle: 'GEMINI' }[live.status] ?? 'GEMINI';
+  return (
+    <button className={`gemini-chip st-${live.status} ${live.mic ? 'mic' : ''}`} onClick={() => orch.openSheet('system')} title={live.detail}>
+      <i />
+      {label}
+    </button>
+  );
+}
+
 function useBattery(): number | null {
   const [lvl, setLvl] = useState<number | null>(null);
   useEffect(() => {
@@ -122,6 +136,7 @@ export function TopBar() {
       </div>
       <div className="topbar-row second">
         <AIStatus />
+        <GeminiChip />
         <InstallChip />
         {anyMock && (
           <button className="mock-badge only-auto" style={{ marginLeft: 'auto' }} onClick={() => orch.openSheet('system')}>

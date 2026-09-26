@@ -182,6 +182,10 @@ export interface TrackMeta {
   identifiedBox?: BBox;
   /** Target changed → re-identify, while still showing the previous identity. */
   stale?: boolean;
+  /** Provisional (on-device) result shown while the identification is still running. */
+  interim?: Identification;
+  /** Run counter: late updates from an older run are ignored. */
+  gen?: number;
 }
 
 /**
@@ -206,7 +210,7 @@ export function targetChanged(before: BBox, now: BBox): boolean {
 export function pickToIdentify(
   dets: Detection[],
   meta: Map<string, TrackMeta>,
-  opts: { now: number; inflight: number; maxInflight: number; stableMs: number; lockedId?: string | null; primaryId?: string | null },
+  opts: { now: number; inflight: number; maxInflight: number; stableMs: number; primaryStableMs?: number; lockedId?: string | null; primaryId?: string | null },
 ): Detection[] {
   const free = opts.maxInflight - opts.inflight;
   if (free <= 0) return [];
@@ -215,7 +219,8 @@ export function pickToIdentify(
     const m = meta.get(d.id);
     if (!m || m.requested || (m.identity && !m.stale)) return false;
     const urgent = d.id === opts.lockedId;
-    return urgent || (opts.now - m.firstSeen >= opts.stableMs && d.confidence >= 0.45);
+    const wait = d.id === opts.primaryId ? (opts.primaryStableMs ?? opts.stableMs) : opts.stableMs;
+    return urgent || (opts.now - m.firstSeen >= wait && d.confidence >= 0.45);
   });
   const rank = (d: Detection) => (d.id === opts.lockedId ? 100 : d.id === opts.primaryId ? 50 : 0) + salience(d, null);
   return eligible.sort((a, b) => rank(b) - rank(a)).slice(0, free);

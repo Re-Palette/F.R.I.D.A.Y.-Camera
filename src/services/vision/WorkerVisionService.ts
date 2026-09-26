@@ -6,6 +6,8 @@ import type { FrameSource, IdentifyRequest, SearchService, VisionCapabilities, V
 import { IdentificationPipeline } from './identify/pipeline';
 import { CloudVision, LocalIdentification, LocalOCR, SearchVerification, localUnderstanding } from './identify/providers';
 import { postJson } from '../http';
+import { LiveAgent } from '../live/agent';
+import { LiveVision } from '../live/vision';
 import { detectLang, sanitize } from './perception';
 import type { FromWorker, ToWorker } from './worker/protocol';
 
@@ -15,7 +17,7 @@ import type { FromWorker, ToWorker } from './worker/protocol';
  * never queues, so results always describe (almost) the current view.
  */
 abstract class WorkerVisionBase implements VisionProvider {
-  abstract readonly mode: 'ondevice' | 'real';
+  abstract readonly mode: 'ondevice' | 'real' | 'live';
   abstract readonly capabilities: VisionCapabilities;
   readonly inputSize = 384;
   /** Last init failure (model download, WASM, …). While set, no frames are sent. */
@@ -121,6 +123,16 @@ abstract class WorkerVisionBase implements VisionProvider {
     return this.request({ type: 'classify', id: ++this.seq, bitmap }, [bitmap]);
   }
 
+  /** Load the classifier in the background so the first identification is instant. */
+  protected warmClassifier() {
+    const run = () =>
+      void createImageBitmap(new ImageData(8, 8))
+        .then((b) => this.classifyBitmap(b))
+        .catch(() => undefined);
+    if (typeof requestIdleCallback === 'function') requestIdleCallback(run, { timeout: 3000 });
+    else setTimeout(run, 1500);
+  }
+
   /** On-device OCR of the whole frame (sign scan). */
   protected async localText(frame: FrameSource): Promise<OcrResult> {
     await this.init();
@@ -207,6 +219,7 @@ export class OnDeviceVisionService extends WorkerVisionBase {
 
   protected onReady() {
     this.capabilities = { ...this.capabilities, text: this.textSupported ? 'local' : 'none' };
+    this.warmClassifier();
   }
 
   async analyzeScene(frame: FrameSource, detections: Detection[], ctx: VisionContext): Promise<SceneAnalysis> {
@@ -269,3 +282,63 @@ export class RemoteVisionService extends WorkerVisionBase {
 }
 
 export { OnDeviceVisionService as LocalVisionProvider, RemoteVisionService as CloudVisionProvider };
+
+/**
+ * LiveVisionProvider (`vision=live`) — detection and tracking stay on-device
+ * (60 fps HUD, no network per frame); each stable target is shown at once
+ * with the on-device guess, then refined by Gemini Live, which also sees the
+ * scene (1 frame / 1–2 s) and talks with the user.
+ */
+export class LiveVisionService extends WorkerVisionBase {
+  readonly mode = 'live' as const;
+  readonly agent: LiveAgent;
+  private readonly live: LiveVision;
+  protected readonly pipe: IdentificationPipeline;
+  private frameGetter: () => { frame: FrameSource; w: number; h: number } | null = () => null;
+  capabilities: VisionCapabilities = { detect: 'local', identify: 'cloud', scene: 'local', text: 'none', identifyNeedsCrop: true, maxInflightIdentify: 2 };
+
+  constructor(search: () => SearchService) {
+    super();
+    this.agent = new LiveAgent(() => this.frameGetter());
+    this.live = new LiveVision(this.agent);
+    this.pipe = new IdentificationPipeline({
+      fast: new LocalIdentification(async (b) => this.classifyBitmap(b)),
+      ocr: new LocalOCR(async (b) => (await this.readBitmapText(b)).map((x) => x.text), () => this.textSupported),
+      understanding: this.live.understanding,
+      identification: this.live.identification,
+      verification: new SearchVerification(search),
+    });
+  }
+
+  /** The orchestrator hands over the camera so frames can stream to the model. */
+  setFrameSource(get: () => { frame: FrameSource; w: number; h: number } | null) {
+    this.frameGetter = get;
+  }
+
+  targetId(trackId: string) {
+    return this.live.targetId(trackId);
+  }
+
+  protected onReady() {
+    this.capabilities = { ...this.capabilities, text: this.textSupported ? 'local' : 'none' };
+    this.warmClassifier();
+  }
+
+  async init() {
+    await super.init();
+    void this.agent.start().catch(() => undefined); // status is reported through agent events
+  }
+
+  async analyzeScene(frame: FrameSource, detections: Detection[], ctx: VisionContext): Promise<SceneAnalysis> {
+    return this.localScene(frame, detections, ctx);
+  }
+
+  ocr(frame: FrameSource): Promise<OcrResult> {
+    return this.localText(frame);
+  }
+
+  dispose() {
+    this.agent.stop();
+    super.dispose();
+  }
+}

@@ -1,4 +1,4 @@
-import { apiBase } from '../core/config';
+import { apiBase, gatewayHeaders } from '../core/config';
 
 export class ApiError extends Error {
   constructor(
@@ -13,7 +13,7 @@ export class ApiError extends Error {
 export async function postJson<T>(path: string, body: unknown, signal?: AbortSignal): Promise<T> {
   const res = await fetch(`${apiBase()}${path}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...gatewayHeaders() },
     body: JSON.stringify(body),
     signal,
   });
@@ -33,7 +33,7 @@ export async function postStream(
 ): Promise<void> {
   const res = await fetch(`${apiBase()}${path}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson' },
+    headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson', ...gatewayHeaders() },
     body: JSON.stringify(body),
     signal,
   });

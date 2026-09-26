@@ -23,7 +23,9 @@ export interface IdentificationDeps {
 
 const LOST_AFTER_MS = 450;
 const FORGET_AFTER_MS = 3000;
+/** Background objects wait a little longer than the one you're pointing at. */
 const STABLE_MS = 500;
+const STABLE_PRIMARY_MS = 200;
 const RETRY_UNKNOWN_MS = 12000;
 
 export class IdentificationManager {
@@ -62,7 +64,7 @@ export class IdentificationManager {
 
     const out = dets.map((d) => this.annotate(d, now));
     const vision = this.deps.vision();
-    for (const d of pickToIdentify(out, this.meta, { now, inflight: this.inflight, maxInflight: vision.capabilities.maxInflightIdentify, stableMs: STABLE_MS, lockedId, primaryId })) {
+    for (const d of pickToIdentify(out, this.meta, { now, inflight: this.inflight, maxInflight: vision.capabilities.maxInflightIdentify, stableMs: STABLE_MS, primaryStableMs: STABLE_PRIMARY_MS, lockedId, primaryId })) {
       void this.run(d, vision);
     }
     return out;
@@ -86,6 +88,7 @@ export class IdentificationManager {
       }
       return { ...d, identity: m.identity };
     }
+    if (m.requested && m.interim) return { ...d, identity: { ...m.interim, stage: m.stage ?? m.interim.stage } };
     if (m.requested) return { ...d, identity: { status: 'identifying', kind: kindFor(d.category), name: '', confidence: d.confidence, stage: m.stage, source: d.source ?? 'local', at: m.requested } };
     return d;
   }
@@ -95,6 +98,9 @@ export class IdentificationManager {
     if (!m) return;
     m.requested = performance.now();
     m.stage = 'reading';
+    m.interim = undefined;
+    const gen = (m.gen = (m.gen ?? 0) + 1);
+    let done = false;
     this.inflight++;
     try {
       // Every provider gets the crop now: OCR, colour and appearance all need pixels.
@@ -106,13 +112,24 @@ export class IdentificationManager {
         scene: this.deps.scene(),
         nearby: this.deps.nearby(),
         onStage: (st) => (m.stage = st),
+        onUpdate: (upd) => {
+          if (m.gen !== gen) return; // a newer run owns this track
+          if (!done) m.interim = upd; // instant guess while the finer model works
+          else m.identity = upd; // refined after the answer (web verification)
+        },
       });
+      done = true;
+      m.interim = undefined;
       m.identity = identity;
       m.identifiedBox = { ...m.bbox };
       m.stale = false;
       m.requested = undefined;
       m.stage = undefined;
     } catch {
+      done = true;
+      const interim = m.interim as Identification | undefined; // set from the onUpdate callback
+      if (!m.identity && interim) m.identity = { ...interim, stage: undefined, provisional: undefined };
+      m.interim = undefined;
       if (!m.identity) m.identity = { status: 'unknown', kind: kindFor(d.category), name: '', confidence: 0, detail: '識別に失敗しました', source: 'local', at: performance.now() };
       m.stale = false;
       m.requested = undefined;

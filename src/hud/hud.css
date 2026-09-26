@@ -3152,3 +3152,61 @@ a.chip {
   border-style: dashed;
   opacity: 0.8;
 }
+
+/* SYSTEM · Gemini Live gateway form */
+.sys-form {
+  grid-template-columns: 1fr;
+}
+.sys-form .sys-input {
+  width: 100%;
+  margin-top: 6px;
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--text);
+  background: rgba(3, 10, 24, 0.6);
+  border: 1px solid var(--edge-strong);
+  border-radius: 4px;
+}
+.sys-form .btn {
+  justify-self: start;
+  margin-top: 8px;
+}
+
+/* Gemini Live status chip */
+.gemini-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 20px;
+  margin-left: 10px;
+  padding: 0 8px;
+  font-family: var(--f-display);
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  color: var(--cyan);
+  background: rgba(3, 10, 24, 0.5);
+  border: 1px solid rgba(69, 210, 255, 0.45);
+  border-radius: 10px;
+  pointer-events: auto;
+}
+.gemini-chip i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.gemini-chip.st-connecting i,
+.gemini-chip.st-reconnecting i {
+  animation: blink 1s steps(2) infinite;
+}
+.gemini-chip.st-error,
+.gemini-chip.st-closed {
+  color: var(--amber);
+  border-color: rgba(255, 197, 61, 0.5);
+}
+.gemini-chip.mic {
+  color: var(--orange-hi);
+  border-color: rgba(255, 140, 60, 0.6);
+}

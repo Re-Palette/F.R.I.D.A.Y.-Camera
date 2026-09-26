@@ -10,7 +10,7 @@
  */
 import { CameraController } from '../camera/CameraController';
 import { FrameSampler } from '../camera/FrameSampler';
-import { toJpegDataUrl } from '../camera/frame';
+import { frameReady, toJpegDataUrl } from '../camera/frame';
 import { live, startMotion } from '../core/live';
 import { perf } from '../perf/metrics';
 import { trackRenderer } from '../hud/tracking/trackRenderer';
@@ -36,6 +36,8 @@ import { createServices, createVision } from '../services/registry';
 import { getState, setState, type SheetKind, type Toast } from '../store/useFriday';
 import { evaluateHazards } from './hazards';
 import { IdentificationManager } from './identification';
+import { LiveVisionService } from '../services/vision/WorkerVisionService';
+import type { LiveAgent } from '../services/live/agent';
 import { attachText, countObjects, detectLang, estimateLocation, geoAnchors, shownName } from '../services/vision/perception';
 import { classifyIntent } from './intents';
 
@@ -48,12 +50,16 @@ const WEATHER_TTL_MS = 10 * 60 * 1000;
 
 const TOD_TAG = { dawn: '夜明け', morning: '朝', day: '昼', dusk: '夕焼け', night: '夜' } as const;
 
+/** Questions Gemini Live answers itself (it sees the camera); app commands stay local. */
+const LIVE_INTENTS = new Set<Intent['kind']>(['identify', 'place_info', 'product_info', 'chat', 'scene', 'search']);
+
 export class Orchestrator {
   services: ServiceRegistry;
   readonly camera = new CameraController();
   private vision: VisionService;
   private running = false;
   private unsubs: (() => void)[] = [];
+  private liveUnsubs: (() => void)[] = [];
   private abort: AbortController | null = null;
   private candidate: { id: string; since: number } | null = null;
   private lastSeen = new Map<string, number>();
@@ -83,6 +89,7 @@ export class Orchestrator {
   constructor() {
     this.services = createServices(getState().serviceModes);
     this.vision = this.services.vision;
+    if (this.vision instanceof LiveVisionService) this.wireLive(this.vision);
     this.sampler = new FrameSampler(
       () => ({ source: this.camera.frame, needsPixels: this.vision.needsPixels, inputSize: this.vision.inputSize }),
       (frame) => this.runVision(frame),
@@ -199,7 +206,8 @@ export class Orchestrator {
     await this.services.location.start();
     this.lastWeatherAt = 0;
     this.lastPoiGeo = null;
-    this.swapVision();
+    // Re-selecting VISION rebuilds it (e.g. new gateway settings → fresh Live session).
+    this.swapVision(name === 'vision');
     this.toast(`${name.toUpperCase()} → ${mode.toUpperCase()}`);
   }
 
@@ -224,16 +232,95 @@ export class Orchestrator {
    * A real camera can't be understood by the mock, so a `mock` vision setting
    * upgrades to on-device detection there.
    */
-  private swapVision() {
+  private swapVision(force = false) {
     const configured = getState().serviceModes.vision;
     const feed = this.camera.source;
     const wanted = feed === 'demo' ? 'mock' : configured === 'mock' ? 'ondevice' : configured;
-    if (this.vision.mode === wanted) return;
+    if (this.vision.mode === wanted && !force) return;
+    this.liveUnsubs.forEach((u) => u());
+    this.liveUnsubs = [];
     this.vision.dispose();
     this.vision = createVision(wanted, { search: () => this.services.search });
+    if (this.vision instanceof LiveVisionService) this.wireLive(this.vision);
+    else setState({ live: null });
     this.vision.init().catch(() => {
       this.toast('VISION MODEL LOAD FAILED', 'warn');
     });
+  }
+
+  private get liveAgent(): LiveAgent | null {
+    return this.vision instanceof LiveVisionService ? this.vision.agent : null;
+  }
+
+  /** Gemini Live: camera frames out; transcripts, speech state and app actions in. */
+  private wireLive(v: LiveVisionService) {
+    v.setFrameSource(() => {
+      const { w, h } = this.camera.frameSize;
+      return w && h && frameReady(this.camera.frame) ? { frame: this.camera.frame, w, h } : null;
+    });
+    const a = v.agent;
+    const liveState = (patch: Partial<NonNullable<ReturnType<typeof getState>['live']>>) =>
+      setState({ live: { status: a.status, mic: a.micOn, ...getState().live, ...patch } });
+    liveState({ status: a.status, detail: undefined, mic: false });
+    this.liveUnsubs = [
+      a.events.on('status', ({ status, detail }) => {
+        liveState({ status, detail });
+        if (status === 'open') this.toast('GEMINI LIVE CONNECTED');
+        if (status === 'error') this.toast(`GEMINI LIVE: ${detail ?? '接続できません'}`, 'warn', 5000);
+      }),
+      a.events.on('mic', (mic) => {
+        liveState({ mic });
+        setState({ listening: mic, partial: mic ? getState().partial : '' });
+      }),
+      a.events.on('userPartial', (partial) => setState({ partial })),
+      a.events.on('userFinal', (text) => {
+        setState({ partial: '' });
+        if (text) this.push({ role: 'user', text, intent: 'chat' });
+        setState({ busy: 'thinking' });
+      }),
+      a.events.on('assistantPartial', (draft) => setState({ draft, busy: null })),
+      a.events.on('assistantFinal', (text) => {
+        this.push({ role: 'assistant', text, intent: 'chat' });
+        this.lastSpoken = text;
+        setState({ draft: '', busy: null });
+      }),
+      a.events.on('speaking', (speaking) => setState({ speaking })),
+      a.events.on('action', ({ action }) => void this.liveAction(action)),
+    ];
+  }
+
+  /** app_action from Gemini Live → the same camera controls the UI uses. */
+  private async liveAction(action: string) {
+    switch (action) {
+      case 'take_photo':
+        return void this.capturePhoto(0).catch(() => undefined);
+      case 'start_recording':
+        return void this.startRecording();
+      case 'stop_recording':
+        return void this.stopRecording();
+      case 'lock_target':
+        return void this.lock();
+      case 'unlock_target':
+        return this.unlock();
+      case 'open_official_site':
+        return void this.execute({ kind: 'open_url', text: '公式サイト', referential: true }, new AbortController().signal);
+      case 'mode_translate':
+        return this.setMode('translate');
+      case 'mode_navigation':
+        return this.setMode('nav');
+      case 'mode_scan':
+        return this.setMode('scan');
+    }
+  }
+
+  /** What the HUD is pointing at, for questions routed to Gemini Live ("これは何？"). */
+  private liveHudContext(): string {
+    const s = getState();
+    const d = s.detections.find((x) => x.id === (s.lockedId ?? s.primaryId));
+    if (!d || !(this.vision instanceof LiveVisionService)) return '';
+    const idt = d.identity;
+    const name = d.category === 'person' ? '人物' : idt && (idt.status === 'identified' || idt.status === 'possible') ? `${idt.name}（${Math.round(idt.confidence * 100)}%${idt.note ? `・${idt.note}` : ''}）` : d.displayName;
+    return `[HUD 補足] ユーザーが指している対象: ${this.vision.targetId(d.id)} = ${name}。`;
   }
 
   get visionMode() {
@@ -466,6 +553,9 @@ export class Orchestrator {
     const key = p ? `${p.id}|${p.identity?.status ?? ''}|${p.identity?.name ?? ''}` : primaryId ?? '';
     if (key !== this.focusKey) {
       this.focusKey = key;
+      // Gemini Live hears the mic directly, so tell it (silently) what "これ" refers to now.
+      const live = this.liveAgent;
+      if (live?.status === 'open' && p?.identity && p.identity.status !== 'identifying') live.setContext(this.liveHudContext());
       if (p) void this.loadFocus(p);
       else if (!primaryId) setState({ focus: null, related: [], news: [], recall: null });
     } else if (p?.identity && s.focus?.identity && s.focus.id === p.id) {
@@ -697,6 +787,12 @@ export class Orchestrator {
   // ─── Conversation ──────────────────────────────────────────────────────
 
   toggleListening() {
+    const live = this.liveAgent;
+    if (live) {
+      // Gemini Live: the mic streams straight to the model (it hears, sees, and answers by voice).
+      void live.toggleMic().catch((e: Error) => this.toast(e.name === 'NotAllowedError' ? 'マイクへのアクセスが拒否されました' : `MIC: ${e.message}`, 'warn'));
+      return;
+    }
     const { voice } = this.services;
     if (getState().listening) voice.stopListening();
     else {
@@ -714,6 +810,7 @@ export class Orchestrator {
 
   /** Barge-in: stop speaking and cancel any in-flight response. */
   interrupt() {
+    this.liveAgent?.interruptPlayback();
     this.services.voice.cancelSpeech();
     this.abort?.abort();
     this.abort = null;
@@ -737,6 +834,19 @@ export class Orchestrator {
     const ctx = this.worldContext();
     const intent: Intent = (await this.services.llm.classify?.(text, ctx)) ?? classifyIntent(text, !!ctx.focus);
     this.push({ role: 'user', text, intent: intent.kind });
+    const live = this.liveAgent;
+    if (live && LIVE_INTENTS.has(intent.kind)) {
+      // Gemini Live sees the camera: it answers (by voice + transcript) with the HUD target as context.
+      try {
+        await live.ask(text, this.liveHudContext());
+        setTimeout(() => getState().busy === 'thinking' && setState({ busy: null }), 12000);
+      } catch (e) {
+        this.push({ role: 'assistant', text: `Gemini Live に接続できません（${(e as Error).message}）。` });
+        setState({ busy: null });
+      }
+      if (this.abort === ac) this.abort = null;
+      return;
+    }
     try {
       const grounding = await this.execute(intent, ac.signal);
       if (ac.signal.aborted) return;

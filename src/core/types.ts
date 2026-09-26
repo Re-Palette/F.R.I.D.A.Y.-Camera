@@ -160,6 +160,8 @@ export interface Identification {
   stage?: IdentifyStage;
   source: PerceptionSource;
   at: number;
+  /** Instant on-device guess, shown while a finer model is still working. */
+  provisional?: boolean;
 }
 
 /**

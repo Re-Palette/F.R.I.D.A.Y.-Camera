@@ -1,0 +1,6 @@
+{
+  "name": "friday-gateway",
+  "private": true,
+  "type": "module",
+  "description": "F.R.I.D.A.Y. gateway — keeps provider API keys server-side (Gemini Live ephemeral tokens)."
+}

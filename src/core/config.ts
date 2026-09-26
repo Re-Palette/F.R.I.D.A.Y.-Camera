@@ -20,7 +20,7 @@ export type ServiceName =
   | 'location'
   | 'memory';
 
-export type ServiceMode = 'mock' | 'real' | 'ondevice';
+export type ServiceMode = 'mock' | 'real' | 'ondevice' | 'live';
 
 export const SERVICE_NAMES: ServiceName[] = [
   'vision',
@@ -37,7 +37,7 @@ export const SERVICE_NAMES: ServiceName[] = [
 
 /** Which modes each service can run in. */
 export const SERVICE_MODES: Record<ServiceName, ServiceMode[]> = {
-  vision: ['mock', 'ondevice', 'real'],
+  vision: ['mock', 'ondevice', 'real', 'live'],
   llm: ['mock', 'real'],
   search: ['mock', 'real'],
   weather: ['mock', 'real'],
@@ -50,7 +50,7 @@ export const SERVICE_MODES: Record<ServiceName, ServiceMode[]> = {
 };
 
 export const SERVICE_DESCRIPTIONS: Record<ServiceName, string> = {
-  vision: 'LOCAL: 端末内検出 · CLOUD: 端末内検出 + クラウド識別',
+  vision: 'LOCAL: 端末内検出 · CLOUD: 端末内検出 + クラウド識別 · LIVE: 端末内検出 + Gemini Live（識別・会話）',
   llm: 'Conversation & reasoning',
   search: 'Web search → rank → summarize',
   weather: 'Open-Meteo (no key)',
@@ -130,6 +130,40 @@ export function resolveServiceModes(): Record<ServiceName, ServiceMode> {
   return out;
 }
 
+const GATEWAY_KEY = 'friday.gateway';
+
+export interface GatewaySettings {
+  /** Base URL of the F.R.I.D.A.Y. gateway (holds provider keys), e.g. https://my-gateway.vercel.app/api */
+  url: string;
+  /** Optional access code the gateway requires (not a provider API key). */
+  accessCode: string;
+}
+
+/** Gateway set in the SYSTEM sheet (runtime) — wins over the build-time VITE_FRIDAY_API_BASE. */
+export function gatewaySettings(): GatewaySettings {
+  try {
+    const raw = globalThis.localStorage?.getItem(GATEWAY_KEY);
+    const v = raw ? (JSON.parse(raw) as Partial<GatewaySettings>) : {};
+    return { url: v.url?.trim() ?? '', accessCode: v.accessCode ?? '' };
+  } catch {
+    return { url: '', accessCode: '' };
+  }
+}
+
+export function saveGatewaySettings(v: GatewaySettings): void {
+  try {
+    globalThis.localStorage?.setItem(GATEWAY_KEY, JSON.stringify({ url: v.url.trim().replace(/\/$/, ''), accessCode: v.accessCode }));
+  } catch {
+    /* storage unavailable */
+  }
+}
+
 export function apiBase(): string {
-  return env().VITE_FRIDAY_API_BASE ?? '/api';
+  return gatewaySettings().url || env().VITE_FRIDAY_API_BASE || '/api';
+}
+
+/** Headers every gateway call carries (the optional access code). */
+export function gatewayHeaders(): Record<string, string> {
+  const code = gatewaySettings().accessCode;
+  return code ? { 'x-friday-access': code } : {};
 }

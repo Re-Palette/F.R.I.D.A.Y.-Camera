@@ -10,7 +10,7 @@ import { MockSearchService, RemoteSearchService } from './search';
 import { MockSocialService, RemoteSocialService } from './social';
 import { MockTranslateService, RemoteTranslateService } from './translate';
 import { MockVisionService } from './vision/MockVisionService';
-import { OnDeviceVisionService, RemoteVisionService } from './vision/WorkerVisionService';
+import { OnDeviceVisionService, LiveVisionService, RemoteVisionService } from './vision/WorkerVisionService';
 import { MockVoiceService, WebVoiceService } from './voice';
 import { MockWeatherService, OpenMeteoWeatherService } from './weather';
 
@@ -21,6 +21,7 @@ import { MockWeatherService, OpenMeteoWeatherService } from './weather';
 export function createVision(mode: ServiceMode, deps: { search: () => SearchService }): VisionService {
   if (mode === 'ondevice') return new OnDeviceVisionService(deps.search);
   if (mode === 'real') return new RemoteVisionService();
+  if (mode === 'live') return new LiveVisionService(deps.search);
   return new MockVisionService();
 }
 

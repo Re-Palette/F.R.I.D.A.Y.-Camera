@@ -120,6 +120,11 @@ export interface IdentifyRequest {
   onStage?: (stage: IdentifyStage) => void;
   /** Always verify on the web (e.g. the user locked the target to see details). */
   forceVerify?: boolean;
+  /**
+   * Progressive results: an instant on-device guess before the final answer,
+   * and the web-verified answer after it. The latest call wins.
+   */
+  onUpdate?: (identity: Identification) => void;
   detection: Detection;
   /** GPU-cropped, downscaled target (≤ 512 px). Null for providers that don't need pixels. */
   crop: ImageBitmap | null;

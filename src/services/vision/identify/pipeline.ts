@@ -14,10 +14,17 @@ import type { Identification, IdentityCandidate, Verification, VisualFeature } f
 import type { IdentificationProvider, IdentifyRequest, ImageUnderstandingProvider, OCRProvider, WebVerificationProvider } from '../../contracts';
 import { applyVerification, candidatesFromText, gradeIdentity, kindFor, levelWord, mergeCandidates, needsVerification, unknownFields } from '../perception';
 
+function withVerification(candidates: IdentityCandidate[], v?: Verification): IdentityCandidate[] {
+  if (!v || !candidates[0]) return candidates;
+  return [{ ...candidates[0], confidence: applyVerification(candidates[0].confidence, v) }, ...candidates.slice(1)].sort((a, b) => b.confidence - a.confidence);
+}
+
 /** Kinds whose next level is a maker / model rather than a species or dish. */
 const BRANDED = new Set<Identification['kind']>(['product', 'vehicle']);
 
 export interface PipelineProviders {
+  /** Optional instant on-device hypothesis shown while `identification` runs. */
+  fast?: IdentificationProvider;
   ocr: OCRProvider;
   understanding: ImageUnderstandingProvider;
   identification: IdentificationProvider;
@@ -42,12 +49,10 @@ export class IdentificationPipeline {
   }
 
   private async runStages(req: IdentifyRequest): Promise<Identification> {
+    let settled = false;
     const d = req.detection;
     const kind = kindFor(d.category);
     const stage = req.onStage ?? (() => undefined);
-
-    stage('reading');
-    const ocr = (await this.p.ocr.readCrop(req).catch(() => [])).filter((t) => t.trim());
 
     // A provider that throws (gateway unreachable, model download failed…) must
     // not turn into "unknown object": the answer falls back to the detector's class.
@@ -57,20 +62,43 @@ export class IdentificationPipeline {
       return v;
     };
 
-    stage('analyzing');
-    const features = await this.p.understanding.analyze(req, ocr).catch(fail([] as VisualFeature[]));
+    stage('reading');
+    const ocr = (await this.p.ocr.readCrop(req).catch(() => [])).filter((t) => t.trim());
+    const fromText = candidatesFromText(ocr);
 
-    stage('matching');
-    const fromModel = await this.p.identification.candidates(req, features, ocr).catch(fail([] as IdentityCandidate[]));
-    let candidates = mergeCandidates(fromModel, candidatesFromText(ocr));
-
-    let verification: Verification | undefined;
-    if (candidates[0] && (req.forceVerify || needsVerification(candidates, kind))) {
-      stage('verifying');
-      verification = await this.verify(candidates[0], features, req).catch(() => undefined);
-      if (verification) candidates = [{ ...candidates[0], confidence: applyVerification(candidates[0].confidence, verification) }, ...candidates.slice(1)].sort((a, b) => b.confidence - a.confidence);
+    // Fast, on-device hypothesis first (≈100 ms) so the HUD shows something at
+    // once; the slower model (cloud / Gemini Live) then refines it in place.
+    const fastP = this.p.fast ? this.p.fast.candidates(req, [], ocr).catch(() => [] as IdentityCandidate[]) : null;
+    if (fastP && req.onUpdate) {
+      void fastP.then((fast) => {
+        if (settled || !fast.length) return;
+        req.onUpdate!({ ...this.finish(req, kind, mergeCandidates(fast, fromText), [], ocr), stage: 'matching', provisional: true });
+      });
     }
-    return this.finish(req, kind, candidates, features, ocr, verification, failed);
+
+    stage('analyzing');
+    // LEVEL 2 and LEVEL 3 run side by side (a vision model answers both in one call).
+    const [features, fromModel] = await Promise.all([
+      this.p.understanding.analyze(req, ocr).catch(fail([] as VisualFeature[])),
+      this.p.identification.candidates(req, [], ocr).catch(fail([] as IdentityCandidate[])),
+    ]);
+    stage('matching');
+    const main = mergeCandidates(fromModel, fromText);
+    // The fine model wins; the on-device guess only stands in when it has nothing.
+    const candidates = main.length ? main : mergeCandidates(fastP ? await fastP : [], fromText);
+    settled = true;
+
+    const verifyWorthIt = !!candidates[0] && !candidates[0].classLevel && (req.forceVerify || needsVerification(candidates, kind));
+    if (!verifyWorthIt) return this.finish(req, kind, candidates, features, ocr, undefined, failed);
+    if (req.forceVerify || !req.onUpdate) {
+      stage('verifying');
+      const v = await this.verify(candidates[0], features, req).catch(() => undefined);
+      return this.finish(req, kind, withVerification(candidates, v), features, ocr, v, failed);
+    }
+    // Show the answer now; the web check refines it in the background (never blocks the HUD).
+    const v = this.verify(candidates[0], features, req).catch(() => undefined);
+    void v.then((ver) => req.onUpdate!(this.finish(req, kind, withVerification(candidates, ver), features, ocr, ver, failed)));
+    return { ...this.finish(req, kind, candidates, features, ocr, undefined, failed), stage: 'verifying' };
   }
 
   /** Web verification only (e.g. the user locked an already-identified target). */
@@ -89,7 +117,11 @@ export class IdentificationPipeline {
     const key = c.name.toLowerCase();
     let v = this.verifyCache.get(key);
     if (!v) {
-      v = this.p.verification.verify(c, features, req.ctx);
+      // A slow search must not leave the HUD on "WEB VERIFY…" forever.
+      v = Promise.race([
+        this.p.verification.verify(c, features, req.ctx),
+        new Promise<Verification>((_, reject) => setTimeout(() => reject(new Error('verification timeout')), 8000)),
+      ]);
       this.verifyCache.set(key, v);
       v.catch(() => this.verifyCache.delete(key));
     }

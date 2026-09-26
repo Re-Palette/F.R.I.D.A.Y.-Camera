@@ -1,6 +1,9 @@
 import { createReadStream, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { defineConfig, type Plugin } from 'vite';
+import type { IncomingMessage, ServerResponse } from 'node:http';
+import { defineConfig, loadEnv, type Connect, type Plugin } from 'vite';
+// @ts-expect-error — plain ESM shared with the deployable gateway (gateway/)
+import { handleLiveToken } from './gateway/live-token.mjs';
 import react from '@vitejs/plugin-react';
 import { VitePWA } from 'vite-plugin-pwa';
 
@@ -29,6 +32,26 @@ function mediapipeRuntime(): Plugin {
 }
 
 /**
+ * Local gateway for `npm run dev` / `npm run preview`: POST /api/live/token
+ * mints a Gemini Live ephemeral token from GEMINI_API_KEY (shell env or
+ * .env.local — never a VITE_ variable, so it is never bundled).
+ */
+function liveGateway(): Plugin {
+  const env = { ...loadEnv('development', process.cwd(), ''), ...process.env } as Record<string, string | undefined>;
+  const mount = (m: Connect.Server) =>
+    m.use('/api/live/token', async (req: IncomingMessage, res: ServerResponse) => {
+      const url = `http://${req.headers.host ?? 'localhost'}/api/live/token`;
+      const headers = new Headers();
+      for (const [k, v] of Object.entries(req.headers)) if (typeof v === 'string') headers.set(k, v);
+      const r: Response = await handleLiveToken(new Request(url, { method: req.method, headers }), env);
+      res.statusCode = r.status;
+      r.headers.forEach((v, k) => res.setHeader(k, v));
+      res.end(await r.text());
+    });
+  return { name: 'friday-live-gateway', configureServer: (s) => void mount(s.middlewares), configurePreviewServer: (s) => void mount(s.middlewares) };
+}
+
+/**
  * `VITE_BASE` lets the same build be served from a sub-path
  * (e.g. GitHub Pages: /F.R.I.D.A.Y.-Camera/). Defaults to the domain root.
  */
@@ -39,6 +62,7 @@ export default defineConfig({
   plugins: [
     react(),
     mediapipeRuntime(),
+    liveGateway(),
     VitePWA({
       registerType: 'autoUpdate',
       injectRegister: false,

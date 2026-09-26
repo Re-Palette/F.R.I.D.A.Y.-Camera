@@ -179,6 +179,25 @@ Two candidates closer than 10 points cap the confidence at 75 % (the pipeline co
 
 **Privacy**: people are never sent to the pipeline. License plates are neither read, stored nor displayed (the car feature list states it explicitly; the gateway prompt must require it).
 
+## 1.8 Gemini Live (`vision=live`)
+
+```
+                         ┌─ on-device: MediaPipe detect/track (60 fps HUD) + EfficientNet guess (~100 ms) ─▶ HUD (provisional)
+camera ─▶ stable target ─┤
+                         └─ IDENTIFICATION session (Gemini Live, warm, silent)
+                              crop JPEG + "[HUD] 対象 T3…" ─▶ report_identification(tool) ─▶ HUD (refined in place)
+                                                                 └▶ web verification in background ─▶ HUD (WEB VERIFIED)
+mic / typed question ─▶ CONVERSATION session (opened on use, frames 1 fps talking / 0.5 fps idle, closed after 2 min idle)
+                              ◀── 24 kHz speech + transcript ─▶ voice console · app_action(tool) ─▶ camera controls
+```
+
+- **Auth:** the browser never holds the API key. `POST {gateway}/live/token` (`gateway/live-token.mjs`, Vercel Edge function / Vite dev middleware) exchanges `GEMINI_API_KEY` for a single-use ephemeral token (`v1alpha/auth_tokens`, `uses: 1`, new session within 60 s); the browser connects to `…v1alpha.GenerativeService.BidiGenerateContentConstrained?access_token=…`. Origin allow-list + optional access code (`x-friday-access`) protect the endpoint. Gateway URL / code are set at runtime in SYSTEM (localStorage), so the static PWA build needs no rebuild.
+- **Protocol** (`services/live/session.ts`, dependency-free): `setup` with `responseModalities: ["AUDIO"]` (current Live models speak; text comes from `outputAudioTranscription`), `inputAudioTranscription`, `contextWindowCompression.slidingWindow` (audio+video sessions are otherwise short), `sessionResumption`; `realtimeInput.video|audio|text|audioStreamEnd`; `clientContent` with `turnComplete: false` to inject HUD context without a reply; `toolResponse` with `scheduling: SILENT` (identification) / `WHEN_IDLE` (app actions). Binary frames are decoded; `goAway` and unexpected closes reconnect with a fresh token and the latest resumption handle.
+- **Why two sessions:** a Live session answers one turn at a time and new input interrupts the current turn. Mixing identification requests with the conversation made them interrupt (and leak into) each other. The identification session serializes requests (next one only after the previous turn ends), never plays audio, and retries a request once if its turn ends unanswered; the conversation session only plays audio while the user is actually talking to it.
+- **Fallbacks:** Live unreachable / timeout (9 s) → the on-device result stays (category / breed / type), never "unknown". People are never identified (`is_person` drops everything); plate-like strings are filtered out of `visible_text`.
+- **Cost control:** identification sends only a ≤512 px crop per stable target (cached per track); the conversation session streams ≤768 px frames only while open (0.5–1 fps, `MEDIA_RESOLUTION_MEDIUM`) and closes after 2 idle minutes; nothing is sent while the page is hidden.
+- **Verified here** against a protocol-faithful mock server (scratch tooling; setup fields, binary frames, tool calls, interruption semantics, goAway + resumption) in Chromium with real on-device models: on-device guess ~0.3 s after the target stabilises, Live answer replaces it on arrival, typed + voice conversation, no identification speech leaking into the conversation, HUD 60 fps. Not verified against Google's live service (no key in CI) — model id and token API follow the official SDK (@google/genai 2.24) and Google's Live API guide.
+
 ## 2. Mock / Real
 
 解決順（上ほど優先）: SYSTEM シートでの上書き（localStorage） → `VITE_SERVICE_<NAME>` → `VITE_FRIDAY_MODE` → 既定値（voice だけ real、他は mock）。
@@ -205,6 +224,7 @@ Two candidates closer than 10 points cap the confidence at 75 % (the pipeline co
 | `POST /vision/detect` | `{ image: dataURL, geo, heading }` | `{ detections: { label, displayName, subtitle, category, confidence, bbox(0‥1), entityId? }[] }` |
 | `POST /vision/scene` | `{ image, detections, geo, heading, now }` | `SceneAnalysis` |
 | `POST /vision/ocr` | `{ image }` | `OcrResult` |
+| `POST /live/token` | – (header `x-friday-access` if configured) | `{ token, wsUrl, model, expiresAt }` — Gemini Live ephemeral token (§1.8) |
 | `POST /vision/analyze` · `/vision/verify` | see §1.6 | `{features, candidates}` · `Verification` |
 | `POST /knowledge/profile` | `{ detection, geo }` | `EntityProfile \| null` |
 | `POST /knowledge/related` | `{ id, name }` | `RelatedInfo[]` |

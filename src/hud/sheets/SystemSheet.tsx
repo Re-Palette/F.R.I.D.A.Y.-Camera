@@ -1,4 +1,4 @@
-import { apiBase, SERVICE_DESCRIPTIONS, SERVICE_MODES, SERVICE_NAMES } from '../../core/config';
+import { apiBase, gatewaySettings, saveGatewaySettings, SERVICE_DESCRIPTIONS, SERVICE_MODES, SERVICE_NAMES } from '../../core/config';
 import type { HudDensity } from '../../core/types';
 import type { DemoScene } from '../../services/contracts';
 import { perf, setQualityPref, type QualityPref } from '../../perf/metrics';
@@ -7,6 +7,53 @@ import { useState } from 'react';
 import { useFriday } from '../../store/useFriday';
 import { useOrch } from '../hooks';
 import { Sheet } from './Sheet';
+
+const LIVE_LABEL: Record<string, string> = {
+  idle: '未接続',
+  connecting: '接続中…',
+  open: '接続済み',
+  reconnecting: '再接続中…',
+  closed: '切断',
+  error: 'エラー',
+};
+
+/** Gemini Live: gateway (token endpoint) + optional access code. No provider key ever lives in the app. */
+function LiveSection() {
+  const orch = useOrch();
+  const live = useFriday((s) => s.live);
+  const visionMode = useFriday((s) => s.serviceModes.vision);
+  const [gw, setGw] = useState(gatewaySettings);
+  const save = () => {
+    saveGatewaySettings(gw);
+    orch.toast('GATEWAY SAVED');
+    if (visionMode === 'live') void orch.setServiceMode('vision', 'live');
+  };
+  return (
+    <>
+      <h3>Gemini Live</h3>
+      <div className="sys-row">
+        <span className="n">STATUS</span>
+        <span className="d">
+          {visionMode === 'live' ? `${LIVE_LABEL[live?.status ?? 'idle']}${live?.detail ? ` · ${live.detail}` : ''}` : 'VISION を LIVE にすると、識別と会話を Gemini Live が担当します'}
+        </span>
+        <span className="seg">
+          <button className={visionMode === 'live' ? 'on' : ''} onClick={() => void orch.setServiceMode('vision', visionMode === 'live' ? 'ondevice' : 'live')}>
+            {visionMode === 'live' ? 'LIVE ON' : 'LIVE OFF'}
+          </button>
+        </span>
+      </div>
+      <div className="sys-row sys-form">
+        <span className="n">GATEWAY</span>
+        <span className="d">トークン発行用ゲートウェイの URL（例: https://xxxx.vercel.app/api）。空欄 = {apiBase()}</span>
+        <input className="sys-input" type="url" inputMode="url" placeholder="https://…/api" value={gw.url} onChange={(e) => setGw({ ...gw, url: e.target.value })} />
+        <input className="sys-input" type="password" placeholder="アクセスコード（設定した場合）" value={gw.accessCode} onChange={(e) => setGw({ ...gw, accessCode: e.target.value })} />
+        <button className="btn primary" onClick={save}>
+          SAVE
+        </button>
+      </div>
+    </>
+  );
+}
 
 const SCENES: [DemoScene, string][] = [
   ['odaiba', 'ODAIBA'],
@@ -129,6 +176,8 @@ export function SystemSheet() {
         </div>
       )}
 
+      <LiveSection />
+
       <h3>Services · Mock / Real</h3>
       {SERVICE_NAMES.map((n) => (
         <div key={n} className="sys-row">
@@ -137,7 +186,7 @@ export function SystemSheet() {
           <span className="seg">
             {SERVICE_MODES[n].map((m) => (
               <button key={m} className={modes[n] === m ? 'on' : ''} onClick={() => void orch.setServiceMode(n, m)}>
-                {n === 'vision' ? { mock: 'MOCK', ondevice: 'LOCAL', real: 'CLOUD' }[m] : m === 'ondevice' ? 'DEVICE' : m.toUpperCase()}
+                {n === 'vision' ? { mock: 'MOCK', ondevice: 'LOCAL', real: 'CLOUD', live: 'LIVE' }[m] : m === 'ondevice' ? 'DEVICE' : m.toUpperCase()}
               </button>
             ))}
           </span>
