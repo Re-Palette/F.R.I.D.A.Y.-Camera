@@ -8,7 +8,7 @@
  * results { label, confidence, bbox }. Nothing here can stall the preview
  * or the HUD's frame loop.
  */
-import type { ObjectDetector } from '@mediapipe/tasks-vision';
+import type { ImageClassifier, ObjectDetector } from '@mediapipe/tasks-vision';
 import type { Detection } from '../../../core/types';
 import { mapLabel } from '../labels';
 import { IouTracker, type RawDetection } from '../tracker';
@@ -21,6 +21,11 @@ const MODEL_URL =
   import.meta.env.VITE_VISION_MODEL_URL ||
   'https://storage.googleapis.com/mediapipe-models/object_detector/efficientdet_lite0/float16/1/efficientdet_lite0.tflite';
 
+/** EfficientNet-Lite0 int8 (ImageNet-1k, Apache-2.0) — fine classification of identification crops only. */
+const CLASSIFIER_URL =
+  import.meta.env.VITE_CLASSIFIER_MODEL_URL ||
+  'https://storage.googleapis.com/mediapipe-models/image_classifier/efficientnet_lite0/int8/1/efficientnet_lite0.tflite';
+
 const ctx = self as unknown as DedicatedWorkerGlobalScope;
 const post = (m: FromWorker) => ctx.postMessage(m);
 
@@ -31,11 +36,41 @@ interface Engine {
 
 // ─── MediaPipe (on-device) ──────────────────────────────────────────────────
 
+type Fileset = Awaited<ReturnType<typeof import('@mediapipe/tasks-vision').FilesetResolver.forVisionTasks>>;
+let filesetP: Promise<Fileset> | null = null;
+function fileset(): Promise<Fileset> {
+  filesetP ??= import('@mediapipe/tasks-vision').then(({ FilesetResolver }) => FilesetResolver.forVisionTasks(WASM_BASE, true));
+  return filesetP;
+}
+
+/**
+ * Loaded on the first identification (not at start-up) so the detector's
+ * cold start is unaffected; runs on a ≤512px crop once per target, never per frame.
+ */
+let classifierP: Promise<ImageClassifier> | null = null;
+function classifier(): Promise<ImageClassifier> {
+  classifierP ??= (async () => {
+    const { ImageClassifier } = await import('@mediapipe/tasks-vision');
+    const fs = await fileset();
+    // In a module worker the WASM loader is `import()`ed — cached after the
+    // detector's first load, so it would not re-define ModuleFactory. A
+    // distinct URL gives this task its own loader run.
+    return ImageClassifier.createFromOptions({ ...fs, wasmLoaderPath: `${fs.wasmLoaderPath}?task=classifier` }, {
+      baseOptions: { modelAssetPath: CLASSIFIER_URL, delegate: 'CPU' },
+      runningMode: 'IMAGE',
+      maxResults: 8,
+      scoreThreshold: 0.03,
+    });
+  })();
+  classifierP.catch(() => (classifierP = null));
+  return classifierP;
+}
+
 async function mediapipe(): Promise<{ engine: Engine; delegate: string }> {
-  const { FilesetResolver, ObjectDetector } = await import('@mediapipe/tasks-vision');
-  const fileset = await FilesetResolver.forVisionTasks(WASM_BASE, true);
+  const { ObjectDetector } = await import('@mediapipe/tasks-vision');
+  const fs = await fileset();
   const make = (delegate: 'GPU' | 'CPU') =>
-    ObjectDetector.createFromOptions(fileset, {
+    ObjectDetector.createFromOptions(fs, {
       baseOptions: { modelAssetPath: MODEL_URL, delegate },
       runningMode: 'VIDEO',
       scoreThreshold: 0.42,
@@ -177,6 +212,20 @@ ctx.onmessage = async (e: MessageEvent<ToWorker>) => {
   }
   if (msg.type === 'reset') {
     engine?.reset();
+    return;
+  }
+  if (msg.type === 'classify') {
+    try {
+      const c = await classifier();
+      const t0 = performance.now();
+      const res = c.classify(msg.bitmap);
+      const classes = (res.classifications[0]?.categories ?? []).map((x) => ({ label: x.categoryName, score: x.score }));
+      post({ type: 'classes', id: msg.id, classes, inferMs: performance.now() - t0 });
+    } catch (err) {
+      post({ type: 'error', id: msg.id, message: `classify: ${(err as Error).message}` });
+    } finally {
+      msg.bitmap.close();
+    }
     return;
   }
   if (msg.type === 'text') {

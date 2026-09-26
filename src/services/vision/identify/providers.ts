@@ -16,6 +16,7 @@ import type {
 } from '../../contracts';
 import { postJson } from '../../http';
 import { MOCK_IDENTITY } from '../../mock/knowledgeBase';
+import { refinable, refine } from '../finelabels';
 import { candidatesFromText, colorName, kindFor } from '../perception';
 import { bitmapToDataUrl, centralColor } from './encode';
 
@@ -94,17 +95,52 @@ export const localUnderstanding: ImageUnderstandingProvider = {
   },
 };
 
-/** On-device hypotheses: class-level only (species for animals, "possible" dishes). OCR evidence is merged by the pipeline. */
-export const localIdentification: IdentificationProvider = {
-  where: 'local',
-  async candidates(req) {
+/**
+ * On-device hypotheses. The crop is classified once (ImageNet-1k,
+ * EfficientNet-Lite0 in the worker) and only refinements consistent with the
+ * detector's class are kept (breed, body type, dish, bottle type…). Brand and
+ * model need text (OCR, merged by the pipeline) or the cloud tier.
+ */
+export class LocalIdentification implements IdentificationProvider {
+  readonly where = 'local' as const;
+  constructor(private readonly classify: (b: ImageBitmap) => Promise<{ label: string; score: number }[]>) {}
+
+  async candidates(req: IdentifyRequest): Promise<IdentityCandidate[]> {
     const d = req.detection;
     const kind = kindFor(d.category);
-    if (kind === 'animal') return [{ name: d.displayName, confidence: d.confidence * 0.95, evidence: ['端末内モデルの分類'] }];
-    if (kind === 'food') return [{ name: d.displayName, confidence: Math.min(0.6, d.confidence), evidence: ['端末内モデルの分類'] }];
-    return [];
-  },
-};
+    const out: IdentityCandidate[] = [];
+    if (req.crop && refinable(d.label)) {
+      // The worker takes ownership of what it's sent — give it a copy.
+      const classes = await this.classify(await createImageBitmap(req.crop)).catch(() => []);
+      for (const f of refine(d.label, classes).slice(0, 3)) {
+        out.push({
+          name: f.ja,
+          confidence: fineConfidence(f.score, d.confidence),
+          evidence: [`端末内の画像分類: ${f.en} ${Math.round(f.score * 100)}%`, `${f.level}の推定`],
+          classLevel: true,
+        });
+      }
+    }
+    if (!out.length && kind === 'animal') out.push({ name: d.displayName, confidence: d.confidence * 0.95, evidence: ['物体検出の分類'], classLevel: true });
+    if (!out.length && kind === 'food') out.push({ name: d.displayName, confidence: Math.min(0.6, d.confidence), evidence: ['物体検出の分類'], classLevel: true });
+    return mergeSameName(out);
+  }
+}
+
+/** A 1000-way softmax score is compressed (√) and tempered by the detector's own confidence. */
+export function fineConfidence(score: number, detConfidence: number): number {
+  return clamp(Math.sqrt(score) * (0.7 + 0.3 * detConfidence), 0, 0.95);
+}
+
+function mergeSameName(cs: IdentityCandidate[]): IdentityCandidate[] {
+  const m = new Map<string, IdentityCandidate>();
+  for (const c of cs) {
+    const had = m.get(c.name);
+    if (!had) m.set(c.name, c);
+    else m.set(c.name, { ...had, confidence: Math.min(0.95, Math.max(had.confidence, c.confidence) + 0.03), evidence: [...(had.evidence ?? []), ...(c.evidence ?? [])] });
+  }
+  return [...m.values()].sort((a, b) => b.confidence - a.confidence);
+}
 
 // ─── Web verification through the Search service ───────────────────────────
 

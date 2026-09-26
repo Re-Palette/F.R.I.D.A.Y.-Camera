@@ -110,6 +110,8 @@ export interface IdentityCandidate {
   evidence?: string[];
   entityId?: string;
   officialUrl?: string;
+  /** Category-level answer (breed / type / dish) with no brand or model. */
+  classLevel?: boolean;
 }
 
 /** Result of checking a candidate against official / trusted web sources. */

@@ -108,7 +108,7 @@ Camera ─▶ Tier 1: DETECT + TRACK (on-device, 5–15 fps, every sampled frame
 | Provider | detect | identify | scene | text | Where |
 |---|---|---|---|---|---|
 | `MockVisionProvider` | scripted demo objects | scripted pipeline (OCR / features / candidates / verification) with realistic stage latency, incl. POSSIBLE / UNKNOWN | scripted | scripted | `vision/MockVisionService.ts` |
-| `LocalVisionProvider` (`vision=ondevice`) | MediaPipe (worker) | on-device OCR of the crop + colour/shape features + brand/model patterns from label text (e.g. `SONY WH-1000XM5`, `Canon EOS R6`); web check through the search service | luminance / counts / GPS heuristics | `TextDetector` in the worker when the platform has it | `vision/WorkerVisionService.ts` |
+| `LocalVisionProvider` (`vision=ondevice`) | MediaPipe (worker) | crop classified once by EfficientNet-Lite0 (ImageNet-1k, int8 5.4 MB, loaded on the first identification; `VITE_CLASSIFIER_MODEL_URL`) and refined only within the detector's class (`finelabels.ts`: dog/cat breeds, car/truck types, dishes, bottle/cup types…) + on-device OCR + colour/shape + brand/model patterns from label text (e.g. `SONY WH-1000XM5`); web check through the search service. Makers and exact models need text or the cloud tier | luminance / counts / GPS heuristics | `TextDetector` in the worker when the platform has it | `vision/WorkerVisionService.ts` |
 | `CloudVisionProvider` (`vision=real`) | **still on-device** (latency, cost, privacy) | gateway `/vision/ocr` + `/vision/analyze` + `/vision/verify` on crops | gateway `/vision/scene` (+ `regions`) | gateway `/vision/ocr` (JP/EN/ZH/KO) | `vision/WorkerVisionService.ts` |
 
 Record shape (`Detection`, `src/core/types.ts`): `id`(=trackingId) · `category`(=type) · `label` · `confidence` · `bbox` · `timestamp` · `attributes` · `source` (`mock|local|cloud|geo|ocr`) · `text` · `identity` (`Identification`: status, kind, name, confidence, candidates, officialUrl, attributes).
@@ -166,6 +166,8 @@ Code: `services/vision/identify/pipeline.ts` (orchestration, cache, finish), `id
 | 60–80 % | brand + family, model as a possibility | **Apple MacBook Air** · モデル：M2 / M3系の可能性 · 72 % |
 | 40–60 % | family-level class | **MacBook系ノートPC** · 正確なモデルは判別できません · 41 % |
 | < 40 % | unknown | 詳細モデルを特定できません |
+
+**Never “unknown” for a known class**: when no provider can go below LEVEL 1 (no candidates, only weak ones, or the gateway is unreachable), the result stays at the detector's class with its confidence — `ノートPC 97 % · メーカー・モデルは判別できません` / `…詳細識別サービスに接続できません` (status `detected`). UNKNOWN is reserved for things the detector itself can't classify.
 
 Two candidates closer than 10 points cap the confidence at 75 % (the pipeline compares them rather than picking one). Plants use 科 → 属 → 種, animals 種 → 品種, cars メーカー → 車種 → 世代 → グレード/年式.
 

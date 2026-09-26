@@ -4,7 +4,7 @@ import type { Detection, Identification, OcrResult, SceneAnalysis } from '../../
 import { timeOfDayFor, uid } from '../../core/util';
 import type { FrameSource, IdentifyRequest, SearchService, VisionCapabilities, VisionContext, VisionFrame, VisionProvider } from '../contracts';
 import { IdentificationPipeline } from './identify/pipeline';
-import { CloudVision, LocalOCR, SearchVerification, localIdentification, localUnderstanding } from './identify/providers';
+import { CloudVision, LocalIdentification, LocalOCR, SearchVerification, localUnderstanding } from './identify/providers';
 import { postJson } from '../http';
 import { detectLang, sanitize } from './perception';
 import type { FromWorker, ToWorker } from './worker/protocol';
@@ -53,6 +53,8 @@ abstract class WorkerVisionBase implements VisionProvider {
           this.settle(m.id, m.detections);
         } else if (m.type === 'text') {
           this.settle(m.id, m.blocks);
+        } else if (m.type === 'classes') {
+          this.settle(m.id, m.classes);
         } else if (m.type === 'error') {
           if (m.id == null) reject(new Error(m.message));
           else {
@@ -111,6 +113,12 @@ abstract class WorkerVisionBase implements VisionProvider {
       return [];
     }
     return this.request({ type: 'text', id: ++this.seq, bitmap }, [bitmap]);
+  }
+
+  /** On-device ImageNet classification of a crop (loaded on first use). The bitmap is consumed. */
+  async classifyBitmap(bitmap: ImageBitmap): Promise<{ label: string; score: number }[]> {
+    await this.init();
+    return this.request({ type: 'classify', id: ++this.seq, bitmap }, [bitmap]);
   }
 
   /** On-device OCR of the whole frame (sign scan). */
@@ -191,7 +199,7 @@ export class OnDeviceVisionService extends WorkerVisionBase {
     this.pipe = new IdentificationPipeline({
       ocr: new LocalOCR(async (b) => (await this.readBitmapText(b)).map((x) => x.text), () => this.textSupported),
       understanding: localUnderstanding,
-      identification: localIdentification,
+      identification: new LocalIdentification(async (b) => this.classifyBitmap(b)),
       verification: new SearchVerification(search),
     });
   }

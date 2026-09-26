@@ -363,7 +363,8 @@ export class Orchestrator {
       out.push(...this.sceneRegions.dets.filter((r) => !out.some((d) => iou(d.bbox, r.bbox) > 0.5)));
     }
     if (now - this.textAt < 6000) out.push(...this.textDets);
-    if (this.camera.source === 'camera' && this.vision.mode !== 'mock' && s.mode === 'scan') {
+    // Projected buildings need a *real* position: never overlay the demo GPS on a live camera.
+    if (this.camera.source === 'camera' && this.vision.mode !== 'mock' && this.services.location.mode === 'real' && s.mode === 'scan') {
       const anchors = geoAnchors(s.pois, s.geo, live.heading || s.heading, { hfov: 55, now });
       out.push(...anchors.filter((g) => !out.some((d) => (d.identity?.entityId ?? d.entityId) === g.entityId)));
     }
@@ -680,7 +681,7 @@ export class Orchestrator {
     if (!target) return false;
     this.lockLastBox = target.bbox;
     // A tapped target is the user's priority: identify it now (or retry an unknown).
-    if (!target.identity || target.identity.status === 'unknown') this.identifier.retry(target.id);
+    if (!target.identity || target.identity.status === 'unknown' || target.identity.status === 'detected') this.identifier.retry(target.id);
     // Details were requested: confirm against official sources (once per model, cached).
     else if (target.identity.status === 'identified' || target.identity.status === 'possible') void this.identifier.verify(target.id, target);
     setState({ lockedId: target.id, lockState: 'locked', primaryId: target.id });

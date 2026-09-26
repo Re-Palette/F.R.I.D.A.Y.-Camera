@@ -83,7 +83,8 @@ export function headline(d: Pick<Detection, 'category' | 'identity' | 'source'>)
   const kind = id?.kind ?? kindFor(d.category);
   if (kind === 'person') return 'PERSON DETECTED';
   if (kind === 'text') return 'TEXT DETECTED';
-  if (!id || id.status === 'detected') return 'TARGET DETECTED';
+  if (!id) return 'TARGET DETECTED';
+  if (id.status === 'detected') return KIND_WORD[kind] ? `${KIND_WORD[kind]} DETECTED` : 'TARGET DETECTED';
   if (id.status === 'identifying') return 'IDENTIFYING…';
   if (id.status === 'unknown') return d.category === 'other' ? 'UNKNOWN OBJECT' : 'TARGET DETECTED';
   if (id.status === 'possible') return kind === 'food' ? 'POSSIBLE DISH' : d.source === 'geo' ? `${KIND_WORD[kind]} · 推定` : 'POSSIBLE MATCH';
@@ -370,8 +371,12 @@ const LEVEL_WORD: Partial<Record<IdentityKind, string>> = {
   landmark: '施設',
 };
 
+export function levelWord(kind: IdentityKind): string {
+  return LEVEL_WORD[kind] ?? 'モデル';
+}
+
 export interface GradedIdentity {
-  status: 'identified' | 'possible' | 'unknown';
+  status: 'identified' | 'possible' | 'unknown' | 'detected';
   name: string;
   note?: string;
   confidence: number;
@@ -396,7 +401,7 @@ export function gradeIdentity(candidates: IdentityCandidate[], kind: IdentityKin
   let c = top.confidence;
   if (second && gap < 0.1) c = Math.min(c, 0.75);
   const hierarchy = { brand: top.brand, family: top.family, model: top.model, variant: top.variant };
-  const word = LEVEL_WORD[kind] ?? 'モデル';
+  const word = top.classLevel && (kind === 'product' || kind === 'vehicle') ? 'タイプ' : (LEVEL_WORD[kind] ?? 'モデル');
   const coarse = [top.brand, top.family].filter(Boolean).join(' ');
   // Generation / trim is rarely provable from an image — always a possibility, never a fact.
   if (c >= 0.9) return { status: 'identified', name: top.name, note: top.variant ? `${top.variant}の可能性` : undefined, confidence: c, hierarchy };
@@ -408,7 +413,10 @@ export function gradeIdentity(candidates: IdentityCandidate[], kind: IdentityKin
   }
   if (c >= POSSIBLE_AT) {
     const base = top.family ?? top.brand;
-    return { status: 'possible', name: base ? `${base}系${genericJa}` : genericJa, note: `正確な${word}は判別できません`, confidence: c, hierarchy: { brand: top.brand, family: top.family } };
+    if (base) return { status: 'possible', name: `${base}系${genericJa}`, note: `正確な${word}は判別できません`, confidence: c, hierarchy: { brand: top.brand, family: top.family } };
+    // A type-level guess (breed, body type, dish): keep the class, offer the guess as a possibility.
+    if (top.name !== genericJa) return { status: 'possible', name: genericJa, note: `${word}：${top.name}の可能性`, confidence: c, hierarchy: {} };
+    return { status: 'possible', name: genericJa, note: `正確な${word}は判別できません`, confidence: c, hierarchy: {} };
   }
   return { status: 'unknown', name: '', note: `詳細${word}を特定できません`, confidence: c, hierarchy: {} };
 }

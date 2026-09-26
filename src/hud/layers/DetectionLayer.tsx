@@ -140,7 +140,7 @@ function selectCard(s: FridayState): string {
     head: stage ? `${stage}…` : '',
     name: shownName(d),
     note: idt?.note,
-    pct: idt && idt.status !== 'identifying' && idt.status !== 'detected' ? Math.round(idt.confidence * 100) : null,
+    pct: idt && idt.status !== 'identifying' ? Math.round(shownConfidence(d) * 100) : null,
     rows: known ? ROW_KEYS.filter(([k]) => idt.attributes?.[k]).map(([k, en]) => [en, idt.attributes![k]]) : [],
     web: idt?.verification ? (WEB_LABEL[idt.verification.status] ?? '') : '',
     mock: idt?.source === 'mock',

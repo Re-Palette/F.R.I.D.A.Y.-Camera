@@ -12,7 +12,10 @@
  */
 import type { Identification, IdentityCandidate, Verification, VisualFeature } from '../../../core/types';
 import type { IdentificationProvider, IdentifyRequest, ImageUnderstandingProvider, OCRProvider, WebVerificationProvider } from '../../contracts';
-import { applyVerification, candidatesFromText, gradeIdentity, kindFor, mergeCandidates, needsVerification, unknownFields } from '../perception';
+import { applyVerification, candidatesFromText, gradeIdentity, kindFor, levelWord, mergeCandidates, needsVerification, unknownFields } from '../perception';
+
+/** Kinds whose next level is a maker / model rather than a species or dish. */
+const BRANDED = new Set<Identification['kind']>(['product', 'vehicle']);
 
 export interface PipelineProviders {
   ocr: OCRProvider;
@@ -46,11 +49,19 @@ export class IdentificationPipeline {
     stage('reading');
     const ocr = (await this.p.ocr.readCrop(req).catch(() => [])).filter((t) => t.trim());
 
+    // A provider that throws (gateway unreachable, model download failed…) must
+    // not turn into "unknown object": the answer falls back to the detector's class.
+    let failed = false;
+    const fail = <T,>(v: T) => () => {
+      failed = true;
+      return v;
+    };
+
     stage('analyzing');
-    const features = await this.p.understanding.analyze(req, ocr).catch(() => [] as VisualFeature[]);
+    const features = await this.p.understanding.analyze(req, ocr).catch(fail([] as VisualFeature[]));
 
     stage('matching');
-    const fromModel = await this.p.identification.candidates(req, features, ocr).catch(() => [] as IdentityCandidate[]);
+    const fromModel = await this.p.identification.candidates(req, features, ocr).catch(fail([] as IdentityCandidate[]));
     let candidates = mergeCandidates(fromModel, candidatesFromText(ocr));
 
     let verification: Verification | undefined;
@@ -59,7 +70,7 @@ export class IdentificationPipeline {
       verification = await this.verify(candidates[0], features, req).catch(() => undefined);
       if (verification) candidates = [{ ...candidates[0], confidence: applyVerification(candidates[0].confidence, verification) }, ...candidates.slice(1)].sort((a, b) => b.confidence - a.confidence);
     }
-    return this.finish(req, kind, candidates, features, ocr, verification);
+    return this.finish(req, kind, candidates, features, ocr, verification, failed);
   }
 
   /** Web verification only (e.g. the user locked an already-identified target). */
@@ -85,15 +96,27 @@ export class IdentificationPipeline {
     return v;
   }
 
-  private finish(req: IdentifyRequest, kind: Identification['kind'], candidates: IdentityCandidate[], features: VisualFeature[], ocr: string[], verification?: Verification): Identification {
+  private finish(req: IdentifyRequest, kind: Identification['kind'], candidates: IdentityCandidate[], features: VisualFeature[], ocr: string[], verification?: Verification, failed = false): Identification {
     const d = req.detection;
     const g = gradeIdentity(candidates, kind, d.displayName);
     const top = candidates[0];
+    const word = levelWord(kind);
+    if (g.status === 'unknown' && d.category !== 'other') {
+      // LEVEL 1 still holds: the detector knows *what kind* of thing this is.
+      g.status = 'detected';
+      g.name = d.displayName;
+      g.confidence = d.confidence;
+      g.hierarchy = {};
+      g.note = failed ? '詳細識別サービスに接続できません（カテゴリーのみ）' : BRANDED.has(kind) ? `メーカー・${word}は判別できません` : `詳細な${word}は判別できません`;
+    } else if (top?.classLevel && g.status !== 'unknown' && !g.note && BRANDED.has(kind)) {
+      // e.g. "スポーツカー" / "マグカップ": a type, not a make or model.
+      g.note = `メーカー・${word}は判別できません`;
+    }
     const color = features.find((f) => f.key === 'color')?.value;
     const attributes: Record<string, string> = {};
     if (g.hierarchy.brand) attributes['ブランド'] = g.hierarchy.brand;
     attributes['カテゴリー'] = d.displayName;
-    if (g.status !== 'unknown' && (g.hierarchy.family || g.hierarchy.model)) attributes['モデル'] = [g.hierarchy.family, g.status === 'identified' ? g.hierarchy.model : undefined].filter(Boolean).join(' ');
+    if ((g.status === 'identified' || g.status === 'possible') && (g.hierarchy.family || g.hierarchy.model)) attributes['モデル'] = [g.hierarchy.family, g.status === 'identified' ? g.hierarchy.model : undefined].filter(Boolean).join(' ');
     if (color) attributes['カラー'] = color;
     const official = verification?.sources.find((s) => s.tier === 'official')?.url ?? top?.officialUrl;
     return {
@@ -103,8 +126,8 @@ export class IdentificationPipeline {
       note: g.note,
       detail: [g.hierarchy.brand, d.displayName, color].filter(Boolean).join(' / '),
       confidence: g.confidence,
-      entityId: g.status !== 'unknown' ? top?.entityId : undefined,
-      officialUrl: g.status !== 'unknown' ? official : undefined,
+      entityId: g.status === 'identified' || g.status === 'possible' ? top?.entityId : undefined,
+      officialUrl: g.status === 'identified' || g.status === 'possible' ? official : undefined,
       attributes,
       candidates: candidates.slice(0, 4).map((c) => ({ name: c.name, confidence: c.confidence, evidence: c.evidence })),
       hierarchy: { ...g.hierarchy, category: d.displayName },

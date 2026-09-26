@@ -42,7 +42,8 @@ export function identityPhrase(p: EntityProfile): string {
   const id = p.identity;
   const pct = id ? Math.round(id.confidence * 100) : 0;
   if (p.category === 'person' || id?.kind === 'person') return '人物を検出しました。個人の特定は行いません。';
-  if (!id || id.status === 'detected') return `${p.name}を検出しています。`;
+  if (!id) return `${p.name}を検出しています。`;
+  if (id.status === 'detected') return `${p.name}を検出しています（確信度${Math.round(id.confidence * 100)}%）。${noteSentence(id.note)}`;
   if (id.status === 'identifying') return `${p.name}を識別中です。`;
   if (id.status === 'unknown') return `何かは特定できませんでした（確信度${pct}%）。「これについて調べて」と言えば画像検索します。`;
   const brand = id.attributes?.['ブランド'];

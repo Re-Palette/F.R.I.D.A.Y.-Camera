@@ -196,7 +196,7 @@ function Provenance({ idt, det }: { idt: Identification; det: Detection }) {
       : idt.status === 'unknown'
         ? `特定できません（${pct(idt.confidence)}）`
         : idt.status === 'detected'
-          ? '未識別（クラウド接続で詳細識別）'
+          ? `カテゴリーのみ · ${pct(det.confidence)}${idt.note ? `（${idt.note}）` : ''}`
           : `${idt.status === 'possible' ? 'POSSIBLE' : 'IDENTIFIED'} · ${pct(idt.confidence)}`;
   return (
     <>
