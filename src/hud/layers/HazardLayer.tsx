@@ -1,27 +1,16 @@
 import { useFriday } from '../../store/useFriday';
-import { boxToScreen } from '../geometry';
 import { Icon } from '../icons';
 
+/** Hazard banner. Hazard boxes are styled on the tracked detection itself (see DetectionLayer). */
 export function HazardLayer() {
-  const s = useFriday();
-  const { hazards, viewSize } = s;
-  if (!hazards.length || !viewSize.w) return null;
-  const top = hazards[0];
+  const message = useFriday((s) => s.hazards[0]?.message);
+  const critical = useFriday((s) => s.hazards[0]?.severity === 'critical');
+  if (!message) return null;
   return (
-    <>
-      <svg className="layer" width={viewSize.w} height={viewSize.h}>
-        {hazards
-          .filter((h) => h.bbox)
-          .map((h) => {
-            const b = boxToScreen(h.bbox!, s);
-            return <rect key={h.id} className={`hz-box ${h.severity === 'critical' ? '' : 'warn'}`} x={b.x - 4} y={b.y - 4} width={b.w + 8} height={b.h + 8} rx={2} />;
-          })}
-      </svg>
-      <div className={`hazard-banner ${top.severity === 'critical' ? '' : 'warn'}`} role="alert">
-        <Icon.Warn size={18} />
-        <span className="k">{top.severity === 'critical' ? 'CAUTION' : 'NOTICE'}</span>
-        {top.message}
-      </div>
-    </>
+    <div className={`hazard-banner ${critical ? '' : 'warn'}`} role="alert">
+      <Icon.Warn size={18} />
+      <span className="k">{critical ? 'CAUTION' : 'NOTICE'}</span>
+      {message}
+    </div>
   );
 }

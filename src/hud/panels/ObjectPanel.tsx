@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react';
 import { relativeJa } from '../../core/util';
 import { frameSize } from '../../camera/frame';
 import { primaryDetection, useFriday } from '../../store/useFriday';
-import { useCountUp, useOrch, usePresence, useSticky } from '../hooks';
+import { useCountUpDom, useOrch, usePresence, useSticky } from '../hooks';
 import { Icon } from '../icons';
 
 /** Live crop of the target from the camera frame. */
@@ -28,7 +28,7 @@ function TargetThumb() {
       }
     };
     draw();
-    const id = setInterval(draw, 350);
+    const id = setInterval(draw, 500);
     return () => clearInterval(id);
   }, [orch]);
   return <canvas ref={ref} width={160} height={160} />;
@@ -37,12 +37,16 @@ function TargetThumb() {
 export function ObjectPanel({ show, compact = false, ticker = false }: { show: boolean; compact?: boolean; ticker?: boolean }) {
   const orch = useOrch();
   const focus = useFriday((s) => s.focus);
-  const det = useFriday(primaryDetection);
+  // Subscribe to primitives only — a new detection object every AI tick must not re-render the card.
+  const hasDet = useFriday((s) => !!primaryDetection(s));
+  const confTarget = useFriday((s) => Math.round((primaryDetection(s)?.confidence ?? 0) * 100));
   const locked = useFriday((s) => s.lockState === 'locked');
   const news = useFriday((s) => s.news[0]);
   const sticky = useSticky(focus);
-  const phase = usePresence(show && !!focus && !!det);
-  const conf = useCountUp(Math.round((det?.confidence ?? 0) * 100), 900);
+  const phase = usePresence(show && !!focus && hasDet);
+  const pctRef = useRef<HTMLSpanElement>(null);
+  const barRef = useRef<HTMLElement>(null);
+  useCountUpDom(confTarget, pctRef, barRef);
   if (!phase || !sticky) return null;
   const facts = sticky.product
     ? [
@@ -78,11 +82,11 @@ export function ObjectPanel({ show, compact = false, ticker = false }: { show: b
         <div className="obj-sub">{sticky.subtitle}</div>
         <div className="conf">
           <span className="pct glow-o">
-            {Math.round(conf)}
+            <span ref={pctRef}>{confTarget}</span>
             <small>%</small>
           </span>
           <span className="bar">
-            <i style={{ width: `${conf}%` }} />
+            <i ref={barRef} style={{ transform: `scaleX(${confTarget / 100})` }} />
           </span>
         </div>
       </div>

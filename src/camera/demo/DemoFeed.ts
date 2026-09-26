@@ -5,6 +5,7 @@
  * layer reads exactly like a <video> element.
  */
 import type { DemoScene } from '../../services/contracts';
+import { onFrame } from '../../perf/frameLoop';
 import { DEMO_MENU_LINES, streetCarBox, sway } from './geometry';
 
 type Ctx = CanvasRenderingContext2D;
@@ -22,7 +23,7 @@ export class DemoFeed {
   private ctx: Ctx;
   private staticLayer: HTMLCanvasElement | null = null;
   private staticKey = '';
-  private raf = 0;
+  private stopLoop: (() => void) | null = null;
   private t0 = performance.now();
   private sceneStart = performance.now();
   scene: DemoScene = 'odaiba';
@@ -49,7 +50,8 @@ export class DemoFeed {
   }
 
   resize(cssW: number, cssH: number) {
-    const dpr = Math.min(window.devicePixelRatio || 1, 1.75);
+    // The demo stands in for a ~720p camera preview; no need for full DPR.
+    const dpr = Math.min(window.devicePixelRatio || 1, 1.25);
     const w = Math.max(2, Math.round(cssW * dpr));
     const h = Math.max(2, Math.round(cssH * dpr));
     if (w !== this.canvas.width || h !== this.canvas.height) {
@@ -60,16 +62,13 @@ export class DemoFeed {
   }
 
   start() {
-    cancelAnimationFrame(this.raf);
-    const loop = () => {
-      this.draw();
-      this.raf = requestAnimationFrame(loop);
-    };
-    this.raf = requestAnimationFrame(loop);
+    this.stopLoop?.();
+    this.stopLoop = onFrame(() => this.draw());
   }
 
   stop() {
-    cancelAnimationFrame(this.raf);
+    this.stopLoop?.();
+    this.stopLoop = null;
   }
 
   /** A MediaStream of the demo feed, used for video recording in demo mode. */

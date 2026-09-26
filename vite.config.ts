@@ -1,6 +1,32 @@
-import { defineConfig } from 'vite';
+import { createReadStream, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { defineConfig, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
 import { VitePWA } from 'vite-plugin-pwa';
+
+/**
+ * Self-hosts the MediaPipe WASM runtime (module build, used by the vision
+ * worker) under /mediapipe/ — no third-party CDN on the hot path, and the
+ * service worker can cache it after first use.
+ */
+function mediapipeRuntime(): Plugin {
+  const dir = 'node_modules/@mediapipe/tasks-vision/wasm';
+  const files = ['vision_wasm_module_internal.js', 'vision_wasm_module_internal.wasm'];
+  return {
+    name: 'friday-mediapipe-runtime',
+    configureServer(server) {
+      server.middlewares.use('/mediapipe', (req, res, next) => {
+        const f = (req.url ?? '').replace(/^\//, '').split('?')[0];
+        if (!files.includes(f)) return next();
+        res.setHeader('Content-Type', f.endsWith('.wasm') ? 'application/wasm' : 'text/javascript');
+        createReadStream(join(dir, f)).pipe(res);
+      });
+    },
+    generateBundle() {
+      for (const f of files) this.emitFile({ type: 'asset', fileName: `mediapipe/${f}`, source: readFileSync(join(dir, f)) });
+    },
+  };
+}
 
 /**
  * `VITE_BASE` lets the same build be served from a sub-path
@@ -12,6 +38,7 @@ export default defineConfig({
   base,
   plugins: [
     react(),
+    mediapipeRuntime(),
     VitePWA({
       registerType: 'autoUpdate',
       injectRegister: false,
@@ -47,14 +74,14 @@ export default defineConfig({
       },
       workbox: {
         globPatterns: ['**/*.{js,css,html,svg,png,woff,woff2}'],
-        globIgnores: ['**/screenshot-*'],
+        globIgnores: ['**/screenshot-*', '**/mediapipe/**'],
         navigateFallback: `${base}index.html`,
         navigateFallbackDenylist: [/\/api\//],
         maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
         runtimeCaching: [
           {
             // On-device vision: MediaPipe WASM runtime + model, cached after first use.
-            urlPattern: ({ url }) => url.hostname === 'cdn.jsdelivr.net' || url.hostname === 'storage.googleapis.com',
+            urlPattern: ({ url }) => url.pathname.includes('/mediapipe/') || url.hostname === 'storage.googleapis.com',
             handler: 'CacheFirst',
             options: { cacheName: 'friday-vision-models', expiration: { maxEntries: 20, maxAgeSeconds: 60 * 60 * 24 * 30 }, cacheableResponse: { statuses: [0, 200] } },
           },
@@ -72,6 +99,8 @@ export default defineConfig({
       },
     }),
   ],
+  // Module workers so the vision worker can lazy-load MediaPipe.
+  worker: { format: 'es' },
   server: { host: true },
   build: { target: 'es2022', chunkSizeWarningLimit: 900 },
   test: { environment: 'node', include: ['src/**/*.test.ts'] },

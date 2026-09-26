@@ -117,6 +117,8 @@ export interface FridayState {
   socialDraft: SocialDraft | null;
 
   toasts: Toast[];
+  /** Developer performance overlay. */
+  perfHud: boolean;
 }
 
 export const initialCamera: CameraSettings = {
@@ -125,12 +127,25 @@ export const initialCamera: CameraSettings = {
   torch: false,
   exposure: 0,
   timerSec: 0,
-  resolution: '4k',
+  preview: '720p',
+  photo: 'max',
   fps: 60,
-  hdr: true,
   stabilization: true,
   night: false,
 };
+
+/** Perf HUD: ?perf=1, VITE_PERF_HUD=1, or the SYSTEM sheet toggle (persisted). Off in production by default. */
+function loadPerfHud(): boolean {
+  try {
+    const q = new URLSearchParams(location.search).get('perf');
+    if (q != null) return q !== '0';
+    const saved = localStorage.getItem('friday.perfHud');
+    if (saved != null) return saved === '1';
+  } catch {
+    /* ignore */
+  }
+  return (import.meta as unknown as { env?: Record<string, string> }).env?.VITE_PERF_HUD === '1';
+}
 
 function loadDensity(): HudDensity {
   try {
@@ -195,6 +210,7 @@ export const useFriday = create<FridayState>(() => ({
   selectedMemory: null,
   socialDraft: null,
   toasts: [],
+  perfHud: loadPerfHud(),
 }));
 
 export const setState = useFriday.setState;

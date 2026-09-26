@@ -1,77 +1,82 @@
+import { useEffect, useMemo, useRef } from 'react';
+import { live } from '../../core/live';
 import { angleDelta, cardinal } from '../../core/util';
-import { useFriday } from '../../store/useFriday';
+import { onFrame } from '../../perf/frameLoop';
+import { getState, useFriday } from '../../store/useFriday';
 import { useOrch } from '../hooks';
 
-/** Compass + radar. North rotates with heading; POIs appear as blips. */
+/**
+ * Compass + radar. The compass card and blips follow the 60 Hz heading from
+ * the frame loop via transform; React renders only when the POI set changes.
+ */
 export function Radar() {
   const orch = useOrch();
-  const heading = useFriday((s) => s.heading);
   const pois = useFriday((s) => s.pois);
-  const nav = useFriday((s) => s.navTarget);
+  const navId = useFriday((s) => s.navTarget?.id);
   const mode = useFriday((s) => s.mode);
-  const ticks = [];
-  for (let a = 0; a < 360; a += 10) {
-    const long = a % 90 === 0;
-    ticks.push(<line key={a} x1="50" y1="6" x2="50" y2={long ? 11 : 8.5} transform={`rotate(${a} 50 50)`} stroke={long ? '#45d2ff' : 'rgba(69,210,255,.45)'} strokeWidth={long ? 1.2 : 0.7} />);
-  }
+  const card = useRef<HTMLDivElement>(null);
+  const blips = useRef<HTMLDivElement>(null);
+  const readout = useRef<HTMLSpanElement>(null);
+
+  useEffect(
+    () =>
+      onFrame(() => {
+        const h = live.heading || getState().heading;
+        if (card.current) card.current.style.transform = `rotate(${(-h).toFixed(1)}deg)`;
+        blips.current?.querySelectorAll<HTMLElement>('[data-b]').forEach((b) => {
+          const a = (angleDelta(h, Number(b.dataset.b)) * Math.PI) / 180;
+          const r = Number(b.dataset.r);
+          b.style.transform = `translate3d(${(r * Math.sin(a)).toFixed(2)}%, ${(-r * Math.cos(a)).toFixed(2)}%, 0)`;
+        });
+        const txt = `${Math.round(h)}° ${cardinal(h)}`;
+        if (readout.current && readout.current.textContent !== txt) readout.current.textContent = txt;
+      }),
+    [],
+  );
+
+  const ticks = useMemo(() => {
+    const out = [];
+    for (let a = 0; a < 360; a += 10) {
+      const long = a % 90 === 0;
+      out.push(<line key={a} x1="50" y1="6" x2="50" y2={long ? 11 : 8.5} transform={`rotate(${a} 50 50)`} stroke={long ? '#45d2ff' : 'rgba(69,210,255,.45)'} strokeWidth={long ? 1.2 : 0.7} />);
+    }
+    return out;
+  }, []);
+
   return (
-    <svg className="radar" viewBox="0 0 100 100" onClick={() => orch.setMode(mode === 'nav' ? 'scan' : 'nav')} role="button" aria-label="Compass and navigation">
-      <defs>
-        <radialGradient id="rad-bg">
-          <stop offset="0%" stopColor="rgba(10,30,60,.55)" />
-          <stop offset="100%" stopColor="rgba(3,8,20,.35)" />
-        </radialGradient>
-        <linearGradient id="sweep" x1="0" y1="0" x2="1" y2="0">
-          <stop offset="0%" stopColor="rgba(69,210,255,0)" />
-          <stop offset="100%" stopColor="rgba(69,210,255,.45)" />
-        </linearGradient>
-      </defs>
-      <circle cx="50" cy="50" r="46" fill="url(#rad-bg)" stroke="rgba(69,210,255,.55)" strokeWidth="0.8" />
-      <circle className="ring-spin" cx="50" cy="50" r="49" fill="none" stroke="#ff8a1f" strokeWidth="1.2" strokeDasharray="18 12 3 12" style={{ filter: 'drop-shadow(0 0 2px #ff8a1f)' }} />
-      <circle cx="50" cy="50" r="31" fill="none" stroke="rgba(69,210,255,.22)" strokeWidth="0.6" />
-      <circle cx="50" cy="50" r="17" fill="none" stroke="rgba(69,210,255,.22)" strokeWidth="0.6" />
-      <g transform={`rotate(${-heading} 50 50)`}>
-        {ticks}
-        {(['N', 'E', 'S', 'W'] as const).map((d, i) => (
-          <text
-            key={d}
-            x="50"
-            y="19"
-            transform={`rotate(${i * 90} 50 50)`}
-            textAnchor="middle"
-            fontSize="8"
-            fontFamily="Rajdhani"
-            fontWeight="700"
-            fill={d === 'N' ? '#ff8a1f' : '#cfe6ff'}
-          >
-            {d}
-          </text>
-        ))}
-      </g>
-      <g className="sweep">
-        <path d="M50 50 L50 4 A46 46 0 0 1 82.5 17.5 Z" fill="url(#sweep)" opacity="0.55" />
-      </g>
-      {pois
-        .filter((p) => p.distanceM < 2500)
-        .map((p) => {
-          const a = (angleDelta(heading, p.bearingDeg) * Math.PI) / 180;
-          const r = 8 + 36 * Math.min(1, p.distanceM / 2500);
-          const isT = nav?.id === p.id;
-          return (
-            <circle
-              key={p.id}
-              cx={50 + r * Math.sin(a)}
-              cy={50 - r * Math.cos(a)}
-              r={isT ? 2.6 : 1.5}
-              fill={isT ? '#ff8a1f' : '#45d2ff'}
-              style={isT ? { filter: 'drop-shadow(0 0 3px #ff8a1f)' } : undefined}
-            />
-          );
-        })}
-      <path d="M50 38 L56 56 L50 52 L44 56 Z" fill="none" stroke="#ff8a1f" strokeWidth="1.4" strokeLinejoin="round" style={{ filter: 'drop-shadow(0 0 3px #ff8a1f)' }} />
-      <text x="50" y="72" textAnchor="middle" fontSize="7" fontFamily="Share Tech Mono" fill="#cfe6ff">
-        {Math.round(heading)}° {cardinal(heading)}
-      </text>
-    </svg>
+    <div className="radar" onClick={() => orch.setMode(mode === 'nav' ? 'scan' : 'nav')} role="button" aria-label="Compass and navigation">
+      <svg className="rd" viewBox="0 0 100 100">
+        <circle cx="50" cy="50" r="46" fill="rgba(5,14,32,.5)" stroke="rgba(69,210,255,.55)" strokeWidth="0.8" />
+        <circle cx="50" cy="50" r="31" fill="none" stroke="rgba(69,210,255,.22)" strokeWidth="0.6" />
+        <circle cx="50" cy="50" r="17" fill="none" stroke="rgba(69,210,255,.22)" strokeWidth="0.6" />
+      </svg>
+      <div className="rd rd-ring">
+        <svg viewBox="0 0 100 100">
+          <circle cx="50" cy="50" r="49" fill="none" stroke="#ff8a1f" strokeWidth="1.2" strokeDasharray="18 12 3 12" />
+        </svg>
+      </div>
+      <div className="rd rd-sweep" />
+      <div className="rd" ref={card}>
+        <svg viewBox="0 0 100 100">
+          {ticks}
+          {(['N', 'E', 'S', 'W'] as const).map((d, i) => (
+            <text key={d} x="50" y="19" transform={`rotate(${i * 90} 50 50)`} textAnchor="middle" fontSize="8" fontFamily="Rajdhani" fontWeight="700" fill={d === 'N' ? '#ff8a1f' : '#cfe6ff'}>
+              {d}
+            </text>
+          ))}
+        </svg>
+      </div>
+      <div className="rd rd-blips" ref={blips}>
+        {pois
+          .filter((p) => p.distanceM < 2500)
+          .map((p) => (
+            <i key={p.id} data-b={p.bearingDeg} data-r={(8 + 36 * Math.min(1, p.distanceM / 2500)).toFixed(1)} className={navId === p.id ? 'nav' : ''} />
+          ))}
+      </div>
+      <svg className="rd" viewBox="0 0 100 100">
+        <path d="M50 38 L56 56 L50 52 L44 56 Z" fill="none" stroke="#ff8a1f" strokeWidth="1.4" strokeLinejoin="round" />
+      </svg>
+      <span className="rd-readout mono" ref={readout} />
+    </div>
   );
 }

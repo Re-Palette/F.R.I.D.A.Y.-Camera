@@ -1,7 +1,7 @@
 import { DEMO_MENU_LINES, DEMO_OBJECTS, applySway, streetCarBox, sway } from '../../camera/demo/geometry';
 import type { Detection, OcrResult, SceneAnalysis } from '../../core/types';
 import { clamp } from '../../core/util';
-import type { DemoScene, FrameSource, VisionContext, VisionService } from '../contracts';
+import type { DemoScene, FrameSource, VisionContext, VisionFrame, VisionService } from '../contracts';
 import { MOCK_ENTITIES } from '../mock/knowledgeBase';
 
 const SCENES: Record<DemoScene, Omit<SceneAnalysis, 'confidence'>> = {
@@ -46,6 +46,9 @@ const SCENES: Record<DemoScene, Omit<SceneAnalysis, 'confidence'>> = {
  */
 export class MockVisionService implements VisionService {
   readonly mode = 'mock' as const;
+  readonly needsPixels = false;
+  readonly inputSize = 0;
+  lastInferMs = 0;
   private t0 = performance.now();
 
   async init() {}
@@ -56,7 +59,7 @@ export class MockVisionService implements VisionService {
     return { time: s, sceneTime: s };
   }
 
-  async detect(_frame: FrameSource, ctx: VisionContext): Promise<Detection[]> {
+  async detect(_frame: VisionFrame, ctx: VisionContext): Promise<Detection[]> {
     const scene = ctx.demoScene ?? 'odaiba';
     const { time, sceneTime } = this.clock(ctx);
     const tr = ctx.demoClock ? sway(time) : { dx: 0, dy: 0, s: 1 };

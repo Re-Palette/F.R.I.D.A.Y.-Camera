@@ -9,7 +9,11 @@
  * manages barge-in. The HUD never calls services directly.
  */
 import { CameraController } from '../camera/CameraController';
-import { captureStill, toJpegDataUrl } from '../camera/frame';
+import { FrameSampler } from '../camera/FrameSampler';
+import { toJpegDataUrl } from '../camera/frame';
+import { live, startMotion } from '../core/live';
+import { perf } from '../perf/metrics';
+import { trackRenderer } from '../hud/tracking/trackRenderer';
 import { saveOverrides, type ServiceMode, type ServiceName } from '../core/config';
 import type {
   CameraSettings,
@@ -24,12 +28,11 @@ import type {
   SocialPlatform,
 } from '../core/types';
 import { boxCenter, boxContains, fmtDateJa, iou, sleep, timeOfDayFor, uid, viewToFrame } from '../core/util';
-import type { DemoScene, Grounding, ServiceRegistry, VisionContext, VisionService, WorldContext } from '../services/contracts';
+import type { DemoScene, Grounding, ServiceRegistry, VisionContext, VisionFrame, VisionService, WorldContext } from '../services/contracts';
 import { toNavTarget } from '../services/places';
 import { createServices } from '../services/registry';
 import { MockVisionService } from '../services/vision/MockVisionService';
-import { OnDeviceVisionService } from '../services/vision/OnDeviceVisionService';
-import { RemoteVisionService } from '../services/vision/RemoteVisionService';
+import { OnDeviceVisionService, RemoteVisionService } from '../services/vision/WorkerVisionService';
 import { getState, setState, type SheetKind, type Toast } from '../store/useFriday';
 import { evaluateHazards } from './hazards';
 import { classifyIntent } from './intents';
@@ -62,10 +65,18 @@ export class Orchestrator {
   private lastSpoken = '';
   private hazardWarned = new Set<string>();
   private timers: ReturnType<typeof setTimeout>[] = [];
+  private lastHeadingPush = 0;
+  /** Pipeline 2: samples camera frames for AI, latest-frame-wins, never blocks the preview. */
+  private readonly sampler: FrameSampler;
 
   constructor() {
     this.services = createServices(getState().serviceModes);
     this.vision = this.services.vision;
+    this.sampler = new FrameSampler(
+      () => ({ source: this.camera.frame, needsPixels: this.vision.needsPixels, inputSize: this.vision.inputSize }),
+      (frame) => this.runVision(frame),
+    );
+    this.camera.onFeedElementChange = () => this.sampler.rebind();
   }
 
   // ─── Lifecycle ─────────────────────────────────────────────────────────
@@ -75,7 +86,11 @@ export class Orchestrator {
     this.wire();
     const forced = new URLSearchParams(location.search).get('demo') as DemoScene | null;
     const bootAnim = sleep(1900);
-    const tasks: Promise<unknown>[] = [this.services.memory.init().then(() => this.refreshMemory()), this.services.location.start()];
+    const tasks: Promise<unknown>[] = [
+      this.services.memory.init().then(() => this.refreshMemory()),
+      this.services.location.start(),
+      startMotion().then((ok) => (perf.motionComp = ok)),
+    ];
     if (forced || !CameraController.supported) {
       this.useDemo(forced ?? getState().demoScene);
     } else {
@@ -102,12 +117,13 @@ export class Orchestrator {
     const sheet = q.get('sheet');
     if (sheet === 'memory' || sheet === 'system') this.openSheet(sheet);
     this.running = true;
-    void this.detectLoop();
+    this.sampler.start();
     void this.worldLoop();
   }
 
   dispose() {
     this.running = false;
+    this.sampler.stop();
     this.unsubs.forEach((u) => u());
     this.timers.forEach(clearTimeout);
     this.services.location.stop();
@@ -125,7 +141,15 @@ export class Orchestrator {
         setState({ geo: { ...geo, placeName: geo.placeName ?? prev?.placeName, area: geo.area ?? prev?.area } });
         if (!prev) void this.onFirstFix();
       }),
-      loc.events.on('heading', (heading) => setState({ heading })),
+      loc.events.on('heading', (heading) => {
+        // 60 Hz sensor → `live` for the frame loop; the store only gets ~8 Hz for text readouts.
+        live.heading = heading;
+        const now = performance.now();
+        if (now - this.lastHeadingPush > 125) {
+          this.lastHeadingPush = now;
+          setState({ heading });
+        }
+      }),
       voice.events.on('listening', (listening) => setState({ listening, partial: listening ? getState().partial : '' })),
       voice.events.on('speaking', (speaking) => setState({ speaking })),
       voice.events.on('partial', (partial) => {
@@ -226,7 +250,7 @@ export class Orchestrator {
   async setCamera(patch: Partial<CameraSettings>) {
     const camera = { ...getState().camera, ...patch };
     setState({ camera });
-    const needsRestart = this.camera.source === 'camera' && (patch.facing || patch.resolution || patch.fps);
+    const needsRestart = this.camera.source === 'camera' && (patch.facing || patch.preview || patch.fps);
     if (needsRestart) {
       try {
         await this.camera.startCamera(camera);
@@ -290,21 +314,20 @@ export class Orchestrator {
     return { focus: s.focus, detections: s.detections, scene: s.scene, geo: s.geo, weather: s.weather, now: new Date() };
   }
 
-  private async detectLoop() {
-    while (this.running) {
-      const t0 = performance.now();
-      const interval = this.vision.mode === 'real' ? 800 : this.vision.mode === 'ondevice' ? 90 : 110;
-      if (!getState().sheet || getState().sheet === 'intel') {
-        try {
-          const dets = await this.vision.detect(this.camera.frame, this.visionCtx());
-          this.processDetections(dets);
-        } catch {
-          /* transient model / network error — keep looping */
-        }
-        if (Date.now() - this.lastSceneAt > SCENE_INTERVAL_MS) void this.analyzeScene();
-      }
-      await sleep(Math.max(16, interval - (performance.now() - t0)));
+  /** Pipeline 2 body: runs for one sampled frame; only lightweight results reach the HUD. */
+  private async runVision(frame: VisionFrame) {
+    const sheet = getState().sheet;
+    if (sheet && sheet !== 'intel') {
+      frame.bitmap?.close();
+      return;
     }
+    const t0 = performance.now();
+    const dets = await this.vision.detect(frame, this.visionCtx());
+    perf.aiInferMs = this.vision.lastInferMs || performance.now() - t0;
+    const v = this.vision as VisionService & { failed?: string | null; delegate?: string };
+    perf.aiEngine = v.failed ? `${v.mode} ✕ ${v.failed.slice(0, 40)}` : `${v.mode}${v.delegate ? ` · ${v.delegate}` : ''}`;
+    trackRenderer.observe(dets, frame.capturedAt);
+    this.processDetections(dets);
   }
 
   private processDetections(dets: Detection[]) {
@@ -422,6 +445,7 @@ export class Orchestrator {
     this.lastSeen.clear();
     this.lastSceneAt = Date.now() - SCENE_INTERVAL_MS + 1600;
     this.lastOcrText = '';
+    trackRenderer.reset();
     setState({ detections: [], primaryId: null, lockedId: null, lockState: 'none', focus: null, related: [], news: [], hazards: [], ocr: null, translations: [], recall: null, scene: null });
     if (getState().mode === 'translate') this.later(() => void this.runTranslate(), 1200);
   }
@@ -431,10 +455,13 @@ export class Orchestrator {
     while (this.running) {
       const s = getState();
       if (s.geo && Date.now() - this.lastWeatherAt > WEATHER_TTL_MS) void this.refreshWeather();
-      if (s.mode === 'translate' && tick % 3 === 0) void this.runTranslate();
-      if (s.mode === 'nav' || tick % 20 === 0) void this.refreshPois();
+      // Scene understanding is the slow path — every few seconds, never per frame.
+      if ((!s.sheet || s.sheet === 'intel') && Date.now() - this.lastSceneAt > SCENE_INTERVAL_MS) void this.analyzeScene();
+      // 500 ms ticks: OCR every 3 s in TRANSLATE, POIs every 1 s in NAV (else every 20 s).
+      if (s.mode === 'translate' && tick % 6 === 0) void this.runTranslate();
+      if ((s.mode === 'nav' && tick % 2 === 0) || tick % 40 === 0) void this.refreshPois();
       tick++;
-      await sleep(1000);
+      await sleep(500);
     }
   }
 
@@ -487,6 +514,10 @@ export class Orchestrator {
       );
       const withBoxes = translations.map((t) => ({ ...t, bbox: ocr.blocks.find((b) => b.id === t.id)?.bbox }));
       setState({ translations: withBoxes });
+      trackRenderer.observeRects(
+        withBoxes.filter((t) => t.bbox).map((t) => ({ id: `tr:${t.id}`, bbox: t.bbox! })),
+        performance.now(),
+      );
       return ocr;
     } catch {
       return null;
@@ -497,6 +528,7 @@ export class Orchestrator {
 
   /** Tap at normalised view coordinates: lock onto a target or focus. */
   tap(x: number, y: number) {
+    void startMotion().then((ok) => (perf.motionComp = ok)); // iOS needs a gesture for motion access
     const s = getState();
     const z = s.feedCss.zoom || 1;
     const p = viewToFrame({ x: (x - 0.5) / z + 0.5, y: (y - 0.5) / z + 0.5 }, s.frameSize, s.viewSize, this.camera.mirrored);
@@ -734,12 +766,12 @@ export class Orchestrator {
     }
     setState({ countdown: null, flashAt: Date.now() });
     navigator.vibrate?.(15);
-    const frame = this.camera.frame;
-    const cam = getState().camera;
-    const filter = cam.night ? 'brightness(1.35) contrast(1.1)' : cam.hdr ? 'contrast(1.06) saturate(1.08)' : undefined;
-    const blob = await captureStill(frame, this.camera.mirrored, filter).catch(() => undefined);
-    const item = this.buildItem('photo', toJpegDataUrl(frame, 360, 0.72));
-    await this.services.memory.save(item, blob);
+    // 見る → 撮る: grab the HUD thumbnail from the preview instantly, then take the
+    // full-resolution still (ImageCapture) — the preview keeps running meanwhile.
+    const thumb = toJpegDataUrl(this.camera.frame, 360, 0.72);
+    const shot = await this.camera.takePhoto(getState().camera).catch(() => null);
+    const item = this.buildItem('photo', thumb);
+    await this.services.memory.save(item, shot?.blob);
     await this.refreshMemory();
     this.toast(`MEMORY SAVED  ${item.tags.slice(0, 3).map((t) => `#${t}`).join(' ')}`, 'memory');
     return item;
@@ -748,12 +780,15 @@ export class Orchestrator {
   async startRecording() {
     if (getState().recording) return;
     if (!this.camera.startRecording()) return this.toast('この端末では録画できません', 'warn');
+    // Leave headroom for the hardware encoder: AI runs slower while recording.
+    this.sampler.capFps = 8;
     setState({ recording: true, recordStartedAt: Date.now() });
   }
 
   async stopRecording() {
     if (!getState().recording) return;
     const blob = await this.camera.stopRecording();
+    this.sampler.capFps = 15;
     setState({ recording: false, recordStartedAt: null });
     const item = this.buildItem('video', toJpegDataUrl(this.camera.frame, 360, 0.72));
     await this.services.memory.save(item, blob ?? undefined);

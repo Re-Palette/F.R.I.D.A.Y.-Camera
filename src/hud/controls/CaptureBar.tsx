@@ -61,11 +61,13 @@ export function CaptureBar() {
         >
           <svg viewBox="0 0 68 68">
             <circle cx="34" cy="34" r="32" fill="none" stroke="rgba(160,210,255,.55)" strokeWidth="1.2" />
-            <g className="spin">
-              <path d="M34 2 A32 32 0 0 1 62 18" fill="none" stroke="#ff8a1f" strokeWidth="2" style={{ filter: 'drop-shadow(0 0 3px #ff8a1f)' }} />
-              <path d="M34 66 A32 32 0 0 1 6 50" fill="none" stroke="#ff8a1f" strokeWidth="2" style={{ filter: 'drop-shadow(0 0 3px #ff8a1f)' }} />
-            </g>
           </svg>
+          <span className="spin">
+            <svg viewBox="0 0 68 68">
+              <path d="M34 2 A32 32 0 0 1 62 18" fill="none" stroke="#ff8a1f" strokeWidth="2" />
+              <path d="M34 66 A32 32 0 0 1 6 50" fill="none" stroke="#ff8a1f" strokeWidth="2" />
+            </svg>
+          </span>
           <span className="core" />
         </button>
         <div className="right">

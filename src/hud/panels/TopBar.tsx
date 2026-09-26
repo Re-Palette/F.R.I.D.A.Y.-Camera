@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { perf } from '../../perf/metrics';
 import { fmtTime } from '../../core/util';
 import { promptInstall, usePwa } from '../../pwa';
 import { deriveAIState, useAIState, useFriday } from '../../store/useFriday';
@@ -84,9 +85,10 @@ export function TopBar() {
           <span className={`live-dot ${recording ? 'rec-dot' : ''}`} />
           {recording ? 'REC' : feed === 'demo' ? 'DEMO' : 'LIVE'}
           <span className="sep" />
-          {cam.resolution === '4k' ? '4K' : 'HD'}
+          {cam.preview === '1080p' ? '1080P' : '720P'}
           <span className="sep" />
-          {cam.fps}FPS
+          <LiveFps fallback={cam.fps} />
+          FPS
         </button>
         <div className="status">
           <svg width="16" height="12" viewBox="0 0 16 12" fill="currentColor" aria-hidden>
@@ -142,17 +144,17 @@ function QuickSettings() {
       <Q on={cam.timerSec > 0} onClick={() => set({ timerSec: cam.timerSec === 0 ? 3 : cam.timerSec === 3 ? 10 : 0 })}>
         <Icon.Timer size={14} /> {cam.timerSec ? `${cam.timerSec}S` : 'TIMER'}
       </Q>
-      <Q on={cam.hdr} onClick={() => set({ hdr: !cam.hdr })}>
-        HDR
-      </Q>
       <Q on={cam.night} onClick={() => set({ night: !cam.night })}>
         <Icon.Moon size={14} /> NIGHT
       </Q>
       <Q on={cam.stabilization} onClick={() => set({ stabilization: !cam.stabilization })}>
         <Icon.Stabilize size={14} /> STAB
       </Q>
-      <Q on={cam.resolution === '4k'} onClick={() => set({ resolution: cam.resolution === '4k' ? '1080p' : '4k' })}>
-        {cam.resolution === '4k' ? '4K' : '1080P'}
+      <Q on={cam.preview === '1080p'} onClick={() => set({ preview: cam.preview === '1080p' ? '720p' : '1080p' })}>
+        PREVIEW {cam.preview === '1080p' ? '1080P' : '720P'}
+      </Q>
+      <Q on={cam.photo === 'max'} onClick={() => set({ photo: cam.photo === 'max' ? 'preview' : 'max' })}>
+        PHOTO {cam.photo === 'max' ? (caps?.photoWidth ? `${Math.round((caps.photoWidth * (caps.photoHeight ?? caps.photoWidth * 0.75)) / 1e6)}MP` : 'MAX') : 'FAST'}
       </Q>
       <Q on={cam.fps === 60} onClick={() => set({ fps: cam.fps === 60 ? 30 : 60 })}>
         {cam.fps}FPS
@@ -179,4 +181,17 @@ function InstallChip() {
       </button>
     </span>
   );
+}
+
+/** Measured preview fps, written straight to the DOM twice a second. */
+function LiveFps({ fallback }: { fallback: number }) {
+  const ref = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    const id = setInterval(() => {
+      const v = perf.camFps || perf.fps;
+      if (ref.current && v) ref.current.textContent = String(Math.round(v));
+    }, 500);
+    return () => clearInterval(id);
+  }, []);
+  return <span ref={ref}>{fallback}</span>;
 }

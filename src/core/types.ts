@@ -397,6 +397,9 @@ export interface CameraCapabilities {
   maxWidth?: number;
   maxHeight?: number;
   maxFps?: number;
+  /** Largest still the device can capture via ImageCapture (px). */
+  photoWidth?: number;
+  photoHeight?: number;
 }
 
 export interface CameraSettings {
@@ -405,9 +408,14 @@ export interface CameraSettings {
   torch: boolean;
   exposure: number;
   timerSec: 0 | 3 | 10;
-  resolution: '1080p' | '4k';
+  /**
+   * Live preview resolution. Kept low on purpose: the preview is for *seeing*
+   * (low latency, high fps); stills are taken separately at full sensor res.
+   */
+  preview: '720p' | '1080p';
+  /** Still capture: full sensor resolution via ImageCapture, or a preview frame. */
+  photo: 'max' | 'preview';
   fps: 30 | 60;
-  hdr: boolean;
   stabilization: boolean;
   night: boolean;
 }

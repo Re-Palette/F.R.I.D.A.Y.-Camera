@@ -19,7 +19,7 @@
 
 | Layer | Path | Role |
 |---|---|---|
-| Camera | `src/camera/` | getUserMedia (4K/60fps を要求)、機能検出付きのズーム・ライト・露出・フォーカス、MediaRecorder、静止画取得。`DemoFeed` はプロシージャルなフォールバック映像 |
+| Camera | `src/camera/` | getUserMedia（プレビューは 720p60、撮影は ImageCapture で最大解像度）、機能検出付きのズーム・ライト・露出・フォーカス、MediaRecorder、静止画取得。`DemoFeed` はプロシージャルなフォールバック映像 |
 | Vision | `src/services/vision/` | `detect` (高速、5〜15 Hz、トラッキング済みで ID が安定) / `analyzeScene` (低速) / `ocr` |
 | Orchestration | `src/orchestrator/` | 各ループ、主対象の選定（ヒステリシス付き）、ターゲットロック、危険検知、意図の振り分け → ツール実行 → LLM への grounding、割り込み発話、撮影 → 意味タグ付きメモリー |
 | Services | `src/services/*` | 契約は `contracts.ts`。各サービスに `Mock*` と Real の実装がある。組み立ては `registry.ts` |
@@ -44,13 +44,56 @@
 4. `LLMService.respond` が grounding を言語化してストリーミングし、`VoiceService.speak` が読み上げます。
 5. 割り込み: TTS 中に STT の途中結果が来たら、自分の読み上げ音声の回り込みでないことを確認した上で `interrupt()`（TTS 停止と応答生成の中断）します。応答パネルのタップでも割り込めます。
 
+## 1.5 Performance architecture (最重要要件)
+
+優先順位: **① プレビューの低遅延 ② 高FPS ③ HUD の滑らかな追従 ④ AI のリアルタイム性** > AI の精度 > 画質。
+
+```
+PIPELINE 1 (見る / 60fps)                    PIPELINE 2 (理解する / 5–15fps, 非同期)
+Camera sensor                                 requestVideoFrameCallback (per camera frame)
+  → getUserMedia 720p60 (preview only)          → FrameSampler: due? engine idle? else DROP (latest-frame-wins)
+  → <video> → GPU compositor → screen           → createImageBitmap(resize ≤384px, GPU)  ← transfer, no copy
+  → HUD overlay (transform/opacity only)        → Web Worker: MediaPipe (GPU/XNNPACK) | JPEG+fetch (remote)
+                                                → { id, label, confidence, bbox } only
+                                                → TrackRenderer (60fps: predict + gyro + smooth → transform)
+CAPTURE (撮る): ImageCapture.takePhoto() at full sensor resolution — only on shutter
+RECORD: MediaRecorder on the camera MediaStream (hardware encoder) — HUD not composited in
+```
+
+| Rule | Where |
+|---|---|
+| JavaScript never reads preview pixels per frame; the video is composited by the browser | `CameraController`, `FeedLayer` |
+| Preview 720p60 (`ideal` + `max`, never a hard `min`) / stills via ImageCapture at max res | `CameraController.startCamera / takePhoto` |
+| AI sampling decoupled from display: rVFC-driven, rate-limited, **no queue** — a busy engine drops frames | `camera/FrameSampler.ts` |
+| Inference + tracking + encoding in a module Web Worker; only small JSON results come back | `services/vision/worker/*` |
+| Software-GL devices use the SIMD CPU delegate (XNNPACK) instead of an emulated GPU | `vision.worker.ts#softwareGl` |
+| Boxes rendered at display rate: velocity extrapolation across AI latency + gyroscope motion compensation (world-space tracks) + critically-damped smoothing; writes `transform` only | `hud/tracking/trackRenderer.ts`, `core/live.ts` |
+| One shared rAF loop for everything that moves | `perf/frameLoop.ts` |
+| 60 Hz sensors (compass / gyro) bypass React (`live`), store receives ≤8 Hz | `Orchestrator.wire` |
+| All CSS animations are transform/opacity on their own layers (reticle, radar, shutter, scan sweep) — no SVG repaint, no layout | `hud.css`, `Reticle`, `Radar` |
+| Adaptive quality: phones start without backdrop blur over the live video; the governor drops glows/scanlines when FPS < 78% of refresh | `perf/metrics.ts` (`html[data-quality]`) |
+| AI rate adapts: backs off when the display drops frames, capped at 8 fps while recording | `FrameSampler.adapt`, `Orchestrator.startRecording` |
+| Engines that fail (e.g. model download) stop receiving frames and retry after 15 s | `WorkerVisionService` |
+
+### Performance Debug Mode
+`?perf=1`, `VITE_PERF_HUD=1`, or SYSTEM → PERF HUD. Off by default in production. Shows:
+FPS / refresh, frame time (avg, p95), dropped display frames, long tasks, camera FPS / resolution,
+**camera latency** (rVFC `expectedDisplayTime − captureTime`), dropped camera frames, AI engine + delegate,
+AI FPS (actual → target), inference time, AI latency (capture → result), skipped (dropped) AI frames,
+JS heap, quality tier, gyro compensation. GPU/CPU utilisation is not exposed to the web and is shown as `n/a`.
+
+Measured in this repo's CI-like sandbox (headless Chromium, software GL, fake 20fps camera):
+display **60.0 fps, p95 16.8 ms** while on-device inference ran at 944 ms (GPU emulated) — the preview/HUD
+are unaffected by AI cost; with the CPU delegate inference dropped to ~100 ms (6.7 AI fps).
+Real phones with a GPU delegate are expected to be faster; verify on-device with `?perf=1`.
+
 ## 2. Mock / Real
 
 解決順（上ほど優先）: SYSTEM シートでの上書き（localStorage） → `VITE_SERVICE_<NAME>` → `VITE_FRIDAY_MODE` → 既定値（voice だけ real、他は mock）。
 
 | Service | mock | real |
 |---|---|---|
-| vision | デモ映像と同期したシナリオ | `ondevice`: MediaPipe EfficientDet-Lite0（端末内） / `real`: ゲートウェイ |
+| vision | デモ映像と同期したシナリオ | `ondevice`: MediaPipe EfficientDet-Lite0（Web Worker・端末内、WASM は `/mediapipe/` から自前配信、モデル URL は `VITE_VISION_MODEL_URL` で変更可） / `real`: ゲートウェイ（エンコードと送信も Worker 内） |
 | llm (+knowledge, social) | テンプレートによる言語化 | ゲートウェイ（例: Claude） |
 | search | 段階表示付きのパイプラインを模擬 | ゲートウェイ（NDJSON ストリーム） |
 | weather | 固定値 | **Open-Meteo（キー不要）** |

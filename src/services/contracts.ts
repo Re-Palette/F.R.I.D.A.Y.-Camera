@@ -37,6 +37,20 @@ export interface ServiceBase {
 /** Something the vision layer can read pixels from. */
 export type FrameSource = HTMLVideoElement | HTMLCanvasElement;
 
+/**
+ * A sampled frame for AI (pipeline 2). `bitmap` is a GPU-downscaled copy
+ * made only for engines that need pixels (worker engines); the preview
+ * itself is never touched. `capturedAt` is the sensor capture time
+ * (performance.now() timebase) used for latency and motion compensation.
+ */
+export interface VisionFrame {
+  source: FrameSource;
+  bitmap: ImageBitmap | null;
+  width: number;
+  height: number;
+  capturedAt: number;
+}
+
 /** Hint for mock implementations: which demo scene is on screen. */
 export type DemoScene = 'odaiba' | 'desk' | 'menu' | 'street';
 
@@ -54,8 +68,14 @@ export interface VisionContext {
 export interface VisionService extends ServiceBase {
   /** Load models / warm up. Safe to call more than once. */
   init(): Promise<void>;
-  /** Fast path, called ~5-15×/s. Returns tracked detections with stable ids. */
-  detect(frame: FrameSource, ctx: VisionContext): Promise<Detection[]>;
+  /** Does this engine need pixels (an ImageBitmap) for `detect`? Mock engines don't. */
+  readonly needsPixels: boolean;
+  /** Preferred long side of the sampled bitmap. */
+  readonly inputSize: number;
+  /** Fast path, called ~5-15×/s off the preview path. Returns tracked detections with stable ids. */
+  detect(frame: VisionFrame, ctx: VisionContext): Promise<Detection[]>;
+  /** Pure inference time of the last detect (ms), if the engine reports it. */
+  lastInferMs?: number;
   /** Slow path, called every few seconds or on scene change. */
   analyzeScene(frame: FrameSource, detections: Detection[], ctx: VisionContext): Promise<SceneAnalysis>;
   /** Text recognition for signs, menus, documents, screens. */

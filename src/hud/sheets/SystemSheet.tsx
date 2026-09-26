@@ -1,7 +1,9 @@
 import { apiBase, SERVICE_DESCRIPTIONS, SERVICE_MODES, SERVICE_NAMES } from '../../core/config';
 import type { HudDensity } from '../../core/types';
 import type { DemoScene } from '../../services/contracts';
+import { perf, setQualityPref, type QualityPref } from '../../perf/metrics';
 import { promptInstall, usePwa } from '../../pwa';
+import { useState } from 'react';
 import { useFriday } from '../../store/useFriday';
 import { useOrch } from '../hooks';
 import { Sheet } from './Sheet';
@@ -22,6 +24,8 @@ export function SystemSheet() {
   const modes = useFriday((s) => s.serviceModes);
   const cameraError = useFriday((s) => s.cameraError);
   const pwa = usePwa();
+  const perfHud = useFriday((s) => s.perfHud);
+  const [qPref, setQPref] = useState<QualityPref>(perf.qualityPref);
 
   return (
     <Sheet open={open} title="SYSTEM">
@@ -50,6 +54,48 @@ export function SystemSheet() {
           {(['minimal', 'auto', 'full'] as HudDensity[]).map((d) => (
             <button key={d} className={density === d ? 'on' : ''} onClick={() => orch.setDensity(d)}>
               {d === 'minimal' ? 'MIN' : d.toUpperCase()}
+            </button>
+          ))}
+        </span>
+      </div>
+
+      <h3>Performance</h3>
+      <div className="sys-row">
+        <span className="n">QUALITY</span>
+        <span className="d">AUTO: fps が落ちたらブラー・グローを自動で軽量化（カメラの滑らかさ優先）</span>
+        <span className="seg">
+          {(['auto', 'high', 'balanced', 'low'] as QualityPref[]).map((q) => (
+            <button
+              key={q}
+              className={qPref === q ? 'on' : ''}
+              onClick={() => {
+                setQualityPref(q);
+                setQPref(q);
+              }}
+            >
+              {q === 'balanced' ? 'BAL' : q.toUpperCase()}
+            </button>
+          ))}
+        </span>
+      </div>
+      <div className="sys-row">
+        <span className="n">PERF HUD</span>
+        <span className="d">FPS / フレーム時間 / カメラ遅延 / AI 推論時間（開発者向け・?perf=1）</span>
+        <span className="seg">
+          {[false, true].map((v) => (
+            <button
+              key={String(v)}
+              className={perfHud === v ? 'on' : ''}
+              onClick={() => {
+                useFriday.setState({ perfHud: v });
+                try {
+                  localStorage.setItem('friday.perfHud', v ? '1' : '0');
+                } catch {
+                  /* ignore */
+                }
+              }}
+            >
+              {v ? 'ON' : 'OFF'}
             </button>
           ))}
         </span>

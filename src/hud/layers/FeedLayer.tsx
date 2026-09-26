@@ -77,13 +77,18 @@ export function FeedLayer() {
     };
   }, [orch]);
 
-  const mirror = feed === 'camera' && cam.facing === 'user';
-  const bright = 1 + css.exposure * 0.18 + (cam.night ? 0.35 : 0);
-  const filter = `brightness(${bright.toFixed(2)})${cam.night ? ' contrast(1.1) saturate(0.85)' : ''}${cam.hdr ? ' saturate(1.06)' : ''}`;
+  // Preview element styling: only transform (composited). A CSS filter is used
+  // solely as a fallback when the camera can't adjust exposure in hardware —
+  // filtering a live video costs a full-screen GPU pass every frame.
+  useEffect(() => {
+    const el = feed === 'camera' ? orch.camera.video : orch.camera.demo.canvas;
+    const mirror = feed === 'camera' && cam.facing === 'user';
+    el.style.transform = `scale(${css.zoom})${mirror ? ' scaleX(-1)' : ''}`;
+    el.style.filter = css.exposure ? `brightness(${(1 + css.exposure * 0.18).toFixed(2)})` : '';
+  }, [feed, css.zoom, css.exposure, cam.facing, orch]);
 
   return (
     <div className="feed" ref={host}>
-      <style>{`.feed > video, .feed > canvas { transform: scale(${css.zoom}) ${mirror ? 'scaleX(-1)' : ''}; filter: ${filter}; }`}</style>
       <div className="feed-shade" />
       <div className="scanlines" />
       {flashAt > 0 && <div key={flashAt} className="flash" />}

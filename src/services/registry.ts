@@ -10,8 +10,7 @@ import { MockSearchService, RemoteSearchService } from './search';
 import { MockSocialService, RemoteSocialService } from './social';
 import { MockTranslateService, RemoteTranslateService } from './translate';
 import { MockVisionService } from './vision/MockVisionService';
-import { OnDeviceVisionService } from './vision/OnDeviceVisionService';
-import { RemoteVisionService } from './vision/RemoteVisionService';
+import { OnDeviceVisionService, RemoteVisionService } from './vision/WorkerVisionService';
 import { MockVoiceService, WebVoiceService } from './voice';
 import { MockWeatherService, OpenMeteoWeatherService } from './weather';
 

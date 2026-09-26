@@ -99,7 +99,7 @@ textarea {
   height: 100%;
   object-fit: cover;
   transform-origin: 50% 50%;
-  transition: transform 0.25s var(--ease), filter 0.3s;
+  transition: transform 0.2s var(--ease);
 }
 .feed-shade {
   position: absolute;
@@ -113,22 +113,25 @@ textarea {
   position: absolute;
   inset: 0;
   pointer-events: none;
-  background: repeating-linear-gradient(180deg, rgba(120, 190, 255, 0.035) 0 1px, transparent 1px 3px);
-  mix-blend-mode: screen;
+  background: repeating-linear-gradient(180deg, rgba(120, 190, 255, 0.03) 0 1px, transparent 1px 3px);
 }
 .scan-sweep {
   position: absolute;
   left: 0;
   right: 0;
+  top: 0;
   height: 22%;
-  top: -22%;
   pointer-events: none;
   background: linear-gradient(180deg, transparent, rgba(69, 210, 255, 0.05) 70%, rgba(69, 210, 255, 0.18) 99%, transparent);
+  will-change: transform;
   animation: sweep 5.5s linear infinite;
 }
 @keyframes sweep {
+  from {
+    transform: translate3d(0, -100%, 0);
+  }
   to {
-    top: 110%;
+    transform: translate3d(0, 560%, 0);
   }
 }
 
@@ -179,7 +182,7 @@ textarea {
   -webkit-backdrop-filter: blur(10px) saturate(1.25);
   box-shadow: inset 0 1px 0 rgba(160, 210, 255, 0.08), 0 8px 28px rgba(0, 0, 0, 0.35);
   padding: 10px 12px;
-  transition: opacity 0.4s var(--ease), transform 0.45s var(--ease), clip-path 0.45s var(--ease), filter 0.4s;
+  transition: opacity 0.35s var(--ease), transform 0.4s var(--ease);
 }
 .panel::before,
 .panel::after {
@@ -217,35 +220,24 @@ textarea {
   opacity: 0.8;
 }
 
-/* Presence animation: holographic unfold */
-[data-presence] {
-  will-change: opacity, transform, clip-path;
-}
+/* Presence animation: opacity + transform only (compositor-friendly) */
 [data-presence='enter'] {
   opacity: 0;
-  transform: translateY(6px) scale(0.985);
-  clip-path: inset(0 0 100% 0);
-  filter: brightness(2.2);
+  transform: translate3d(0, 8px, 0) scale(0.98);
 }
 [data-presence='shown'] {
   opacity: 1;
   transform: none;
-  clip-path: inset(0 0 0 0);
-  filter: none;
 }
 [data-presence='exit'] {
   opacity: 0;
-  transform: translateY(-4px) scale(0.99);
-  clip-path: inset(0 0 0 100%);
-  filter: brightness(1.6);
+  transform: translate3d(0, -6px, 0) scale(0.99);
 }
 .from-right[data-presence='enter'] {
-  transform: translateX(14px);
-  clip-path: inset(0 0 0 100%);
+  transform: translate3d(16px, 0, 0);
 }
 .from-right[data-presence='exit'] {
-  transform: translateX(10px);
-  clip-path: inset(0 100% 0 0);
+  transform: translate3d(12px, 0, 0);
 }
 
 /* ─── Typography ───────────────────────────────────────────────────────── */
@@ -470,8 +462,10 @@ textarea {
 }
 .ai-state .glyph i {
   width: 2px;
+  height: 12px;
   background: currentColor;
   border-radius: 1px;
+  transform-origin: 50% 100%;
   animation: bar 1s ease-in-out infinite;
 }
 .ai-state .glyph i:nth-child(2) {
@@ -491,10 +485,10 @@ textarea {
 @keyframes bar {
   0%,
   100% {
-    height: 3px;
+    transform: scaleY(0.25);
   }
   50% {
-    height: 12px;
+    transform: scaleY(1);
   }
 }
 .ai-state[data-s='IDENTIFIED'],
@@ -697,10 +691,10 @@ textarea {
 }
 .bar > i {
   position: absolute;
-  inset: 0 auto 0 0;
+  inset: 0;
+  transform-origin: 0 50%;
   background: linear-gradient(90deg, var(--orange), var(--orange-hi));
   box-shadow: 0 0 8px var(--orange);
-  transition: width 0.4s var(--ease);
 }
 .bar.cyan > i {
   background: linear-gradient(90deg, rgba(69, 210, 255, 0.5), var(--cyan));
@@ -815,14 +809,6 @@ textarea {
   height: 96px;
   flex: none;
   cursor: pointer;
-}
-.radar .sweep {
-  transform-origin: 50px 50px;
-  animation: spin 3.2s linear infinite;
-}
-.radar .ring-spin {
-  transform-origin: 50px 50px;
-  animation: spin 22s linear infinite reverse;
 }
 @keyframes spin {
   to {
@@ -969,24 +955,6 @@ textarea {
   opacity: 0;
   transform: translate(-50%, -50%) scale(1.15);
 }
-.reticle .r-spin {
-  transform-origin: 200px 200px;
-  animation: spin 18s linear infinite;
-}
-.reticle .r-spin-rev {
-  transform-origin: 200px 200px;
-  animation: spin 11s linear infinite reverse;
-}
-.reticle[data-busy='1'] .r-spin {
-  animation-duration: 2.4s;
-}
-.reticle[data-busy='1'] .r-spin-rev {
-  animation-duration: 1.6s;
-}
-.reticle .r-pulse {
-  transform-origin: 200px 200px;
-  animation: pulse 2.4s var(--ease) infinite;
-}
 @keyframes pulse {
   0% {
     transform: scale(0.7);
@@ -1007,30 +975,9 @@ textarea {
 
 /* ─── Detection boxes ──────────────────────────────────────────────────── */
 
-.det {
-  transition: transform 0.12s linear, opacity 0.35s;
-}
-.det .br {
-  fill: none;
-  stroke-width: 1.5;
-}
-.det.other .br {
-  stroke: var(--cyan);
-  opacity: 0.7;
-}
-.det.primary .br {
-  stroke: var(--orange);
-  stroke-width: 2;
-  filter: drop-shadow(0 0 4px rgba(255, 138, 31, 0.9));
-}
-.det.locked .br {
-  stroke: var(--orange-hi);
-  stroke-width: 2.4;
-}
 .det-tag {
   position: absolute;
   transform: translate(0, -100%);
-  transition: left 0.12s linear, top 0.12s linear, opacity 0.35s;
   white-space: nowrap;
   font-family: var(--f-display);
   font-size: 11px;
@@ -1068,7 +1015,6 @@ textarea {
   background: rgba(3, 10, 24, 0.62);
   backdrop-filter: blur(6px);
   -webkit-backdrop-filter: blur(6px);
-  transition: left 0.12s linear, top 0.12s linear, opacity 0.4s;
   white-space: nowrap;
 }
 .target-card .h {
@@ -1077,16 +1023,6 @@ textarea {
 }
 .target-card.lost .h {
   color: var(--amber);
-}
-.lock-ring {
-  transform-box: fill-box;
-  transform-origin: center;
-  animation: spin 6s linear infinite;
-}
-.lock-in {
-  transform-box: fill-box;
-  transform-origin: center;
-  animation: lockin 0.55s var(--ease) both;
 }
 @keyframes lockin {
   from {
@@ -1139,6 +1075,7 @@ textarea {
   letter-spacing: 0.03em;
   box-shadow: 0 0 22px rgba(255, 64, 64, 0.45), inset 0 0 18px rgba(255, 64, 64, 0.2);
   animation: hz 0.9s ease-in-out infinite alternate;
+  will-change: opacity;
   backdrop-filter: blur(6px);
   -webkit-backdrop-filter: blur(6px);
   white-space: nowrap;
@@ -1161,21 +1098,8 @@ textarea {
 }
 @keyframes hz {
   to {
-    box-shadow: 0 0 34px rgba(255, 64, 64, 0.75), inset 0 0 24px rgba(255, 64, 64, 0.35);
+    opacity: 0.72;
   }
-}
-.hz-box {
-  stroke: var(--red);
-  fill: rgba(255, 40, 40, 0.06);
-  stroke-width: 2;
-  filter: drop-shadow(0 0 6px rgba(255, 64, 64, 0.9));
-  stroke-dasharray: 8 5;
-  animation: dash 0.8s linear infinite;
-}
-.hz-box.warn {
-  stroke: var(--amber);
-  fill: rgba(255, 197, 61, 0.05);
-  filter: drop-shadow(0 0 5px rgba(255, 197, 61, 0.8));
 }
 @keyframes dash {
   to {
@@ -1197,7 +1121,6 @@ textarea {
   font-weight: 500;
   text-align: center;
   line-height: 1.2;
-  transition: left 0.12s linear, top 0.12s linear;
   animation: trin 0.5s var(--ease) both;
   overflow: hidden;
 }
@@ -1212,10 +1135,7 @@ textarea {
 }
 @keyframes trin {
   from {
-    clip-path: inset(0 100% 0 0);
-  }
-  to {
-    clip-path: inset(0 0 0 0);
+    opacity: 0;
   }
 }
 
@@ -1227,7 +1147,7 @@ textarea {
   flex-direction: column;
   align-items: center;
   gap: 4px;
-  transition: left 0.15s linear, opacity 0.3s;
+  transition: opacity 0.3s;
   pointer-events: none;
 }
 .nav-marker .pin {
@@ -1421,7 +1341,8 @@ textarea {
 }
 .wave i {
   width: 2px;
-  height: 4px;
+  height: 14px;
+  transform-origin: 50% 50%;
   background: currentColor;
   border-radius: 1px;
   animation: bar 0.9s ease-in-out infinite;
@@ -1582,10 +1503,6 @@ textarea {
 .shutter svg {
   position: absolute;
   inset: 0;
-}
-.shutter .spin {
-  transform-origin: 34px 34px;
-  animation: spin 14s linear infinite;
 }
 .shutter .core {
   width: 50px;
@@ -2502,4 +2419,428 @@ textarea {
     top: 34%;
     font-size: 13px;
   }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   PERFORMANCE-FIRST HUD PRIMITIVES
+   Everything that moves is a composited layer driven by transform/opacity.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.layer,
+.det-layer {
+  contain: strict;
+}
+
+/* ─── Tracked detections (positions written by TrackRenderer) ──────────── */
+
+.det {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  will-change: transform;
+  --cc: var(--cyan);
+  --cl: 14px;
+}
+.det .c {
+  position: absolute;
+  width: var(--cl);
+  height: var(--cl);
+  border: 0 solid var(--cc);
+  will-change: transform;
+}
+.det .tl {
+  left: 0;
+  top: 0;
+  border-width: 1.5px 0 0 1.5px;
+}
+.det .tr {
+  left: calc(-1 * var(--cl));
+  top: 0;
+  border-width: 1.5px 1.5px 0 0;
+}
+.det .bl {
+  left: 0;
+  top: calc(-1 * var(--cl));
+  border-width: 0 0 1.5px 1.5px;
+}
+.det .br {
+  left: calc(-1 * var(--cl));
+  top: calc(-1 * var(--cl));
+  border-width: 0 1.5px 1.5px 0;
+}
+.det.other .c {
+  opacity: 0.7;
+}
+.det.primary {
+  --cc: var(--orange);
+  --cl: 20px;
+}
+.det.primary .c {
+  border-width: 2px;
+}
+.det.primary .tl {
+  border-width: 2px 0 0 2px;
+}
+.det.primary .tr {
+  border-width: 2px 2px 0 0;
+}
+.det.primary .bl {
+  border-width: 0 0 2px 2px;
+}
+.det.primary .br {
+  border-width: 0 2px 2px 0;
+}
+.det.locked {
+  --cc: var(--orange-hi);
+}
+.det.lost {
+  --cc: var(--amber);
+}
+.det.hz-warn {
+  --cc: var(--amber);
+}
+.det.hz-critical {
+  --cc: var(--red);
+}
+.det.hz-critical .c {
+  animation: blink 0.6s ease-in-out infinite;
+}
+.det .cross {
+  position: absolute;
+  left: -7px;
+  top: -7px;
+  width: 14px;
+  height: 14px;
+  background:
+    linear-gradient(var(--orange-hi), var(--orange-hi)) center / 1px 100% no-repeat,
+    linear-gradient(var(--orange-hi), var(--orange-hi)) center / 100% 1px no-repeat;
+  opacity: 0.8;
+  will-change: transform;
+}
+.det .lock-ring {
+  position: absolute;
+  left: -100px;
+  top: -100px;
+  width: 200px;
+  height: 200px;
+  will-change: transform;
+}
+.det .lock-ring .spin {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 2px dashed var(--cc);
+  animation: spin 6s linear infinite, lockin 0.5s var(--ease) both;
+}
+@keyframes lockin {
+  from {
+    opacity: 0;
+    transform: scale(1.6);
+  }
+}
+.det-tag {
+  left: 0;
+  top: 0;
+}
+.target-card {
+  left: 0;
+  top: 0;
+  will-change: transform;
+}
+.leader {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 1px;
+  height: 1px;
+  background: rgba(120, 185, 255, 0.55);
+  transform-origin: 0 50%;
+  will-change: transform;
+}
+
+/* Translation blocks: size + position from the renderer, font from the block height. */
+.tr-block {
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  container-type: size;
+  will-change: transform;
+}
+.tr-block .txt {
+  font-size: clamp(9px, 42cqh, 17px);
+}
+
+/* Nav markers: horizontal position follows the compass via transform. */
+.nav-marker {
+  left: 0;
+  top: 0;
+  will-change: transform, opacity;
+}
+.nav-edge {
+  transition: opacity 0.25s;
+}
+.nav-edge[data-side='left'] {
+  left: calc(var(--safe-l) + 12px);
+}
+.nav-edge[data-side='right'] {
+  right: calc(var(--safe-r) + 12px);
+}
+.nav-edge[data-side='left'] .r,
+.nav-edge[data-side='right'] .l {
+  display: none;
+}
+.nav-floor {
+  transition: opacity 0.25s;
+}
+.nav-floor .chev {
+  filter: drop-shadow(0 0 4px #ff8a1f);
+}
+
+/* ─── Reticle: stacked composited layers ─────────────────────────────────── */
+
+.reticle .rl {
+  position: absolute;
+  inset: 0;
+  will-change: transform;
+}
+.reticle .rl svg {
+  display: block;
+}
+.reticle .core {
+  fill: rgba(255, 140, 50, 0.035);
+}
+.reticle .rl-spin {
+  animation: spin 18s linear infinite;
+}
+.reticle .rl-rev {
+  animation: spin 11s linear infinite reverse;
+}
+.reticle[data-busy='1'] .rl-spin {
+  animation-duration: 2.4s;
+}
+.reticle[data-busy='1'] .rl-rev {
+  animation-duration: 1.6s;
+}
+.reticle .rl-pulse {
+  opacity: 0;
+}
+.reticle[data-mode='active'] .rl-pulse,
+.reticle[data-voice='LISTENING'] .rl-pulse {
+  animation: pulse 2.4s var(--ease) infinite;
+}
+.reticle .rl-voice {
+  opacity: 0;
+  transition: opacity 0.3s;
+}
+.reticle[data-voice] .rl-voice {
+  opacity: 0;
+}
+.reticle[data-voice='LISTENING'] .rl-voice,
+.reticle[data-voice='SPEAKING'] .rl-voice {
+  opacity: 1;
+  animation: voicepulse 0.7s ease-in-out infinite alternate;
+}
+@keyframes voicepulse {
+  from {
+    transform: scale(0.97);
+    opacity: 0.55;
+  }
+  to {
+    transform: scale(1.04);
+    opacity: 1;
+  }
+}
+
+/* ─── Radar: composited layers ───────────────────────────────────────────── */
+
+.radar {
+  position: relative;
+  flex: none;
+  cursor: pointer;
+}
+.radar .rd {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  will-change: transform;
+}
+.radar .rd svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+.radar .rd-ring {
+  animation: spin 22s linear infinite reverse;
+}
+.radar .rd-sweep {
+  border-radius: 50%;
+  inset: 4%;
+  width: auto;
+  height: auto;
+  background: conic-gradient(from 0deg, rgba(69, 210, 255, 0.4), rgba(69, 210, 255, 0) 60deg, transparent 360deg);
+  animation: spin 3.2s linear infinite;
+  opacity: 0.55;
+}
+.radar .rd-blips i {
+  position: absolute;
+  inset: 0;
+  will-change: transform;
+}
+.radar .rd-blips i::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 3px;
+  height: 3px;
+  margin: -1.5px 0 0 -1.5px;
+  border-radius: 50%;
+  background: var(--cyan);
+}
+.radar .rd-blips i.nav::after {
+  width: 6px;
+  height: 6px;
+  margin: -3px 0 0 -3px;
+  background: var(--orange);
+  box-shadow: 0 0 5px var(--orange);
+}
+.radar .rd-readout {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 68%;
+  text-align: center;
+  font-size: 9px;
+  color: #cfe6ff;
+  pointer-events: none;
+}
+
+/* Shutter ring spin as its own layer */
+.shutter .spin {
+  position: absolute;
+  inset: 0;
+  animation: spin 14s linear infinite;
+  will-change: transform;
+}
+.shutter .spin svg,
+.shutter > svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+.shutter .spin path {
+  filter: drop-shadow(0 0 3px #ff8a1f);
+}
+
+/* ─── Perf HUD ───────────────────────────────────────────────────────────── */
+
+.perf-hud {
+  position: absolute;
+  right: calc(var(--safe-r) + 8px);
+  top: calc(var(--safe-t) + 190px);
+  z-index: 40;
+  min-width: 176px;
+  padding: 7px 9px;
+  background: rgba(0, 0, 0, 0.72);
+  border: 1px solid rgba(92, 242, 168, 0.5);
+  font-family: var(--f-mono);
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: #b8ffd9;
+  pointer-events: none;
+  contain: layout paint;
+}
+.perf-title {
+  font-family: var(--f-display);
+  font-weight: 700;
+  letter-spacing: 0.2em;
+  color: var(--green);
+  margin-bottom: 2px;
+}
+.perf-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  white-space: nowrap;
+}
+.perf-row span:first-child {
+  color: rgba(184, 255, 217, 0.6);
+}
+.perf-row span[data-warn='1'] {
+  color: var(--amber);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   QUALITY TIERS (html[data-quality]) — chosen by the adaptive governor.
+   Backdrop blur over a live 60 fps video is the single most expensive HUD
+   effect on phones (it re-blurs every frame), so it goes first.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+[data-quality='balanced'] .panel,
+[data-quality='low'] .panel,
+[data-quality='balanced'] .feed-chips,
+[data-quality='low'] .feed-chips,
+[data-quality='balanced'] .icon-btn,
+[data-quality='low'] .icon-btn,
+[data-quality='balanced'] .round-btn,
+[data-quality='low'] .round-btn,
+[data-quality='balanced'] .utter,
+[data-quality='low'] .utter,
+[data-quality='balanced'] .target-card,
+[data-quality='low'] .target-card,
+[data-quality='balanced'] .nav-marker .pin,
+[data-quality='low'] .nav-marker .pin,
+[data-quality='balanced'] .hazard-banner,
+[data-quality='low'] .hazard-banner,
+[data-quality='balanced'] .toast,
+[data-quality='low'] .toast {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+[data-quality='balanced'] .panel,
+[data-quality='low'] .panel {
+  background: linear-gradient(160deg, rgba(10, 22, 46, 0.8), rgba(4, 10, 24, 0.74));
+}
+[data-quality='balanced'] .utter,
+[data-quality='low'] .utter,
+[data-quality='balanced'] .target-card,
+[data-quality='low'] .target-card {
+  background: rgba(4, 12, 28, 0.8);
+}
+[data-quality='balanced'] .sheet,
+[data-quality='low'] .sheet {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  background: linear-gradient(180deg, rgba(8, 18, 40, 0.96), rgba(3, 8, 20, 0.98));
+}
+
+[data-quality='low'] .scanlines,
+[data-quality='low'] .scan-sweep,
+[data-quality='low'] .reticle .rl-rev,
+[data-quality='low'] .reticle .rl-pulse {
+  display: none;
+}
+[data-quality='low'] .panel::before,
+[data-quality='low'] .panel::after,
+[data-quality='low'] .reticle .o,
+[data-quality='low'] .frame .o,
+[data-quality='low'] .shutter .spin path,
+[data-quality='low'] .nav-floor .chev,
+[data-quality='low'] .wx svg,
+[data-quality='low'] .fc-head svg {
+  filter: none;
+}
+[data-quality='low'] .brand,
+[data-quality='low'] .glow-o,
+[data-quality='low'] .modes button.on {
+  text-shadow: none;
+}
+[data-quality='low'] .panel {
+  box-shadow: none;
 }

@@ -46,9 +46,17 @@ export function captureStill(frame: FrameSource, mirror = false, filter?: string
 }
 
 /** Mean luminance 0‥1 — cheap exposure / time-of-day heuristic. */
+let lumaCanvas: HTMLCanvasElement | null = null;
+
 export function meanLuma(frame: FrameSource): number {
-  const c = snapshot(frame, 48);
-  const d = c.getContext('2d')!.getImageData(0, 0, c.width, c.height).data;
+  const { w, h } = frameSize(frame);
+  const k = 48 / Math.max(w, h || 1);
+  lumaCanvas = lumaCanvas ?? document.createElement('canvas');
+  lumaCanvas.width = Math.max(1, Math.round(w * k));
+  lumaCanvas.height = Math.max(1, Math.round(h * k));
+  const ctx = lumaCanvas.getContext('2d', { willReadFrequently: true })!;
+  ctx.drawImage(frame, 0, 0, lumaCanvas.width, lumaCanvas.height);
+  const d = ctx.getImageData(0, 0, lumaCanvas.width, lumaCanvas.height).data;
   let sum = 0;
   for (let i = 0; i < d.length; i += 4) sum += 0.2126 * d[i] + 0.7152 * d[i + 1] + 0.0722 * d[i + 2];
   return sum / (d.length / 4) / 255;

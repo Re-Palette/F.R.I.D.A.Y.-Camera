@@ -25,6 +25,7 @@ import { MemorySheet } from './sheets/MemorySheet';
 import { SearchSheet } from './sheets/SearchSheet';
 import { SocialSheet } from './sheets/SocialSheet';
 import { SystemSheet } from './sheets/SystemSheet';
+import { PerfHud } from './PerfHud';
 import { Toasts } from './Toasts';
 
 function useWide() {
@@ -89,6 +90,7 @@ export function Hud() {
         </>
       )}
       <Toasts />
+      <PerfHud />
       <SearchSheet />
       <MemorySheet />
       <IntelSheet />

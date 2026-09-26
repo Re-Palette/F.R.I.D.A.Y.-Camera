@@ -2,6 +2,7 @@ import type { CameraCapabilities, CameraSettings, Facing } from '../core/types';
 import { clamp } from '../core/util';
 import type { DemoScene, FrameSource } from '../services/contracts';
 import { DemoFeed } from './demo/DemoFeed';
+import { captureStill } from './frame';
 
 type ExtCaps = MediaTrackCapabilities & {
   zoom?: { min: number; max: number; step: number };
@@ -11,28 +12,51 @@ type ExtCaps = MediaTrackCapabilities & {
   frameRate?: { max?: number };
 };
 
+interface ImageCaptureLike {
+  takePhoto(settings?: { imageWidth?: number; imageHeight?: number; fillLightMode?: string }): Promise<Blob>;
+  getPhotoCapabilities(): Promise<{ imageWidth?: { max: number }; imageHeight?: { max: number }; fillLightMode?: string[] }>;
+}
+type ImageCaptureCtor = new (track: MediaStreamTrack) => ImageCaptureLike;
+
+const PREVIEW = {
+  '720p': { width: 1280, height: 720 },
+  '1080p': { width: 1920, height: 1080 },
+} as const;
+
 /**
- * Camera layer. Owns the physical camera (getUserMedia) or the procedural
- * demo feed, and exposes a single `frame` for the vision layer. Hardware
- * features are applied through track constraints when the device supports
- * them, with graceful CSS fallbacks (digital zoom, exposure) otherwise.
+ * Camera layer — "見る" と "撮る" を分離:
+ *
+ *  PREVIEW (pipeline 1): a modest-resolution, high-fps MediaStream played by a
+ *  <video> element. The browser composites it on the GPU; no JavaScript ever
+ *  touches preview pixels, so AI or HUD work cannot make it stutter.
+ *
+ *  CAPTURE: on shutter only — ImageCapture.takePhoto() at the sensor's full
+ *  resolution (the ISP applies its own HDR / noise reduction), falling back to
+ *  a preview frame where ImageCapture is unavailable.
+ *
+ *  RECORD: MediaRecorder on the camera stream itself (hardware encoder), fully
+ *  independent from the HUD and from AI.
  */
 export class CameraController {
   readonly video: HTMLVideoElement;
   readonly demo: DemoFeed;
   private stream: MediaStream | null = null;
   private track: MediaStreamTrack | null = null;
+  private imageCapture: ImageCaptureLike | null = null;
   private recorder: MediaRecorder | null = null;
   private chunks: Blob[] = [];
   source: 'camera' | 'demo' = 'demo';
   facing: Facing = 'environment';
   caps: CameraCapabilities | null = null;
+  /** Called whenever the preview element changes (so the sampler can re-bind). */
+  onFeedElementChange: (() => void) | null = null;
 
   constructor() {
     this.video = document.createElement('video');
     this.video.playsInline = true;
     this.video.muted = true;
     this.video.autoplay = true;
+    this.video.disablePictureInPicture = true;
     this.video.setAttribute('playsinline', '');
     this.demo = new DemoFeed();
   }
@@ -57,18 +81,30 @@ export class CameraController {
 
   async startCamera(settings: CameraSettings): Promise<void> {
     this.stopStream();
-    const is4k = settings.resolution === '4k';
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: false,
-      video: {
-        facingMode: { ideal: settings.facing },
-        width: { ideal: is4k ? 3840 : 1920 },
-        height: { ideal: is4k ? 2160 : 1080 },
-        frameRate: { ideal: settings.fps },
-      },
-    });
+    const res = PREVIEW[settings.preview];
+    // Portrait phones deliver rotated frames; ask for the long side on width and
+    // let the browser pick the orientation. `max` stops drivers from choosing a
+    // heavy 4K mode that would cost frame rate.
+    // Only `ideal` (soft) constraints plus a `max` cap: a hard `min` frame rate
+    // makes getUserMedia fail outright on cameras that can't reach it.
+    const video: MediaTrackConstraints = {
+      facingMode: { ideal: settings.facing },
+      width: { ideal: res.width, max: 1920 },
+      height: { ideal: res.height, max: 1920 },
+      frameRate: { ideal: settings.fps },
+      // Hint for Chrome: scale down in the capture pipeline rather than pick a heavy native mode.
+      ...({ resizeMode: 'crop-and-scale' } as object),
+    };
+    let stream: MediaStream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: false, video });
+    } catch (err) {
+      if ((err as Error).name !== 'OverconstrainedError') throw err;
+      stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: { facingMode: { ideal: settings.facing } } });
+    }
     this.stream = stream;
     this.track = stream.getVideoTracks()[0] ?? null;
+    if (this.track && 'contentHint' in this.track) this.track.contentHint = 'motion';
     this.facing = settings.facing;
     this.video.srcObject = stream;
     await this.video.play().catch(() => undefined);
@@ -78,8 +114,11 @@ export class CameraController {
     });
     this.source = 'camera';
     this.demo.stop();
-    this.caps = this.readCaps();
+    const IC = (globalThis as unknown as { ImageCapture?: ImageCaptureCtor }).ImageCapture;
+    this.imageCapture = IC && this.track ? new IC(this.track) : null;
+    this.caps = await this.readCaps();
     await this.apply(settings);
+    this.onFeedElementChange?.();
   }
 
   startDemo(scene: DemoScene) {
@@ -87,7 +126,8 @@ export class CameraController {
     this.source = 'demo';
     this.demo.setScene(scene);
     this.demo.start();
-    this.caps = { torch: false, focusModes: [], zoom: { min: 1, max: 5, step: 0.1 }, maxWidth: 3840, maxHeight: 2160, maxFps: 60 };
+    this.caps = { torch: false, focusModes: [], zoom: { min: 1, max: 5, step: 0.1 }, maxWidth: 1280, maxHeight: 720, maxFps: 60 };
+    this.onFeedElementChange?.();
   }
 
   setDemoScene(scene: DemoScene) {
@@ -98,8 +138,9 @@ export class CameraController {
     this.demo.resize(w, h);
   }
 
-  private readCaps(): CameraCapabilities {
+  private async readCaps(): Promise<CameraCapabilities> {
     const c = (this.track?.getCapabilities?.() ?? {}) as ExtCaps;
+    const photo = await this.imageCapture?.getPhotoCapabilities().catch(() => null);
     return {
       zoom: c.zoom ? { min: c.zoom.min, max: c.zoom.max, step: c.zoom.step || 0.1 } : undefined,
       torch: !!c.torch,
@@ -108,12 +149,15 @@ export class CameraController {
       maxWidth: c.width?.max,
       maxHeight: c.height?.max,
       maxFps: c.frameRate?.max,
+      photoWidth: photo?.imageWidth?.max,
+      photoHeight: photo?.imageHeight?.max,
     };
   }
 
   /** Applies hardware constraints. Returns which settings needed a CSS fallback. */
   async apply(s: CameraSettings): Promise<{ cssZoom: number; cssExposure: number }> {
-    const out = { cssZoom: s.zoom, cssExposure: s.exposure };
+    const exposure = s.night ? Math.max(s.exposure, 2) : s.exposure;
+    const out = { cssZoom: s.zoom, cssExposure: exposure };
     if (this.source !== 'camera' || !this.track || !this.caps) return out;
     const adv: Record<string, unknown> = {};
     if (this.caps.zoom) {
@@ -122,21 +166,20 @@ export class CameraController {
     }
     if (this.caps.torch) adv.torch = s.torch;
     if (this.caps.exposure) {
-      adv.exposureCompensation = clamp(s.exposure, this.caps.exposure.min, this.caps.exposure.max);
+      adv.exposureCompensation = clamp(exposure, this.caps.exposure.min, this.caps.exposure.max);
       out.cssExposure = 0;
     }
     if (Object.keys(adv).length) {
       try {
         await this.track.applyConstraints({ advanced: [adv as MediaTrackConstraintSet] });
       } catch {
-        /* unsupported combination — keep CSS fallback */
         out.cssZoom = s.zoom;
       }
     }
     return out;
   }
 
-  /** Tap-to-focus: single-shot focus when supported (point of interest is not widely exposed). */
+  /** Tap-to-focus: single-shot focus when supported. */
   async focusAt(): Promise<void> {
     if (!this.track || !this.caps?.focusModes.length) return;
     const mode = this.caps.focusModes.includes('single-shot') ? 'single-shot' : this.caps.focusModes[0];
@@ -147,6 +190,28 @@ export class CameraController {
     }
   }
 
+  // ─── Capture (撮る) ─────────────────────────────────────────────────────
+
+  /**
+   * High-quality still, taken only at shutter time. The preview keeps running;
+   * on Android the ISP reconfigures briefly for the full-res shot.
+   */
+  async takePhoto(s: CameraSettings): Promise<{ blob: Blob; source: 'sensor' | 'preview' }> {
+    if (this.source === 'camera' && this.imageCapture && s.photo === 'max' && !this.mirrored) {
+      try {
+        const blob = await this.imageCapture.takePhoto({
+          imageWidth: this.caps?.photoWidth,
+          imageHeight: this.caps?.photoHeight,
+          fillLightMode: s.torch ? 'flash' : 'off',
+        });
+        return { blob, source: 'sensor' };
+      } catch {
+        /* fall back to a preview frame */
+      }
+    }
+    return { blob: await captureStill(this.frame, this.mirrored), source: 'preview' };
+  }
+
   // ─── Recording ─────────────────────────────────────────────────────────
 
   startRecording(): boolean {
@@ -154,9 +219,9 @@ export class CameraController {
     if (!stream || typeof MediaRecorder === 'undefined') return false;
     const mime = ['video/mp4;codecs=avc1', 'video/webm;codecs=vp9', 'video/webm'].find((m) => MediaRecorder.isTypeSupported?.(m));
     this.chunks = [];
-    this.recorder = new MediaRecorder(stream, mime ? { mimeType: mime, videoBitsPerSecond: 12_000_000 } : undefined);
+    this.recorder = new MediaRecorder(stream, mime ? { mimeType: mime, videoBitsPerSecond: 8_000_000 } : undefined);
     this.recorder.ondataavailable = (e) => e.data.size && this.chunks.push(e.data);
-    this.recorder.start(500);
+    this.recorder.start(1000);
     return true;
   }
 
@@ -167,6 +232,7 @@ export class CameraController {
       rec.onstop = () => {
         resolve(this.chunks.length ? new Blob(this.chunks, { type: rec.mimeType || 'video/webm' }) : null);
         this.recorder = null;
+        this.chunks = [];
       };
       rec.stop();
     });
@@ -176,6 +242,7 @@ export class CameraController {
     this.stream?.getTracks().forEach((t) => t.stop());
     this.stream = null;
     this.track = null;
+    this.imageCapture = null;
   }
 
   dispose() {

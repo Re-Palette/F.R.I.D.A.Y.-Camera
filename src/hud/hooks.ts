@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useRef, useState } from 'react';
+import { createContext, useContext, useEffect, useRef, useState, type RefObject } from 'react';
 import type { Orchestrator } from '../orchestrator/Orchestrator';
 
 export const OrchestratorContext = createContext<Orchestrator | null>(null);
@@ -85,4 +85,27 @@ export function useNow(ms = 1000): number {
 export function useUntil(until: number | undefined): boolean {
   const now = useNow(500);
   return !!until && until > now;
+}
+
+/**
+ * Count-up that writes straight to the DOM (textContent + transform scaleX),
+ * so animating a number never re-renders the component.
+ */
+export function useCountUpDom(target: number, text: RefObject<HTMLElement | null>, bar?: RefObject<HTMLElement | null>, ms = 800) {
+  const from = useRef(target);
+  useEffect(() => {
+    const start = performance.now();
+    const a = from.current;
+    let raf = 0;
+    const step = () => {
+      const k = Math.min(1, (performance.now() - start) / ms);
+      const v = a + (target - a) * (1 - Math.pow(1 - k, 3));
+      from.current = v;
+      if (text.current) text.current.textContent = String(Math.round(v));
+      if (bar?.current) bar.current.style.transform = `scaleX(${(v / 100).toFixed(3)})`;
+      if (k < 1) raf = requestAnimationFrame(step);
+    };
+    raf = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(raf);
+  }, [target, ms, text, bar]);
 }
