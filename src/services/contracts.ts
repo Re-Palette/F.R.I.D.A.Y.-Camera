@@ -13,7 +13,9 @@ import type {
   Detection,
   EntityProfile,
   GeoFix,
+  Identification,
   Intent,
+  LocationEstimate,
   MemoryHit,
   MemoryItem,
   NavTarget,
@@ -52,7 +54,7 @@ export interface VisionFrame {
 }
 
 /** Hint for mock implementations: which demo scene is on screen. */
-export type DemoScene = 'odaiba' | 'desk' | 'menu' | 'street';
+export type DemoScene = 'odaiba' | 'city' | 'desk' | 'menu' | 'street';
 
 export interface VisionContext {
   geo?: GeoFix;
@@ -65,7 +67,40 @@ export interface VisionContext {
 
 // ─── Vision ─────────────────────────────────────────────────────────────────
 
+/** What a provider can do, and where each capability runs. */
+export interface VisionCapabilities {
+  /** Fast per-frame detection + tracking. */
+  detect: 'mock' | 'local' | 'cloud';
+  /** Tier-2 identification of a cropped target (車 → Tesla Model 3). */
+  identify: 'mock' | 'local' | 'cloud';
+  scene: 'mock' | 'local' | 'cloud';
+  text: 'none' | 'mock' | 'local' | 'cloud';
+  /** Does `identify` need a pixel crop of the target? */
+  identifyNeedsCrop: boolean;
+  /** Max identifications in flight (cost / latency budget). */
+  maxInflightIdentify: number;
+}
+
+export interface IdentifyRequest {
+  detection: Detection;
+  /** GPU-cropped, downscaled target (≤ 512 px). Null for providers that don't need pixels. */
+  crop: ImageBitmap | null;
+  ctx: VisionContext;
+  scene?: SceneAnalysis | null;
+  /** Nearby places (helps the model name buildings / stores). */
+  nearby?: PlaceInfo[];
+}
+
+/**
+ * VisionProvider — the only thing the orchestrator knows about vision.
+ *
+ *   VisionProvider
+ *   ├── MockVisionProvider   scripted demo scenes (no network)
+ *   ├── LocalVisionProvider  on-device: MediaPipe detection + TextDetector OCR + heuristics
+ *   └── CloudVisionProvider  hybrid: local real-time detection + cloud identification / scene / OCR
+ */
 export interface VisionService extends ServiceBase {
+  readonly capabilities: VisionCapabilities;
   /** Load models / warm up. Safe to call more than once. */
   init(): Promise<void>;
   /** Does this engine need pixels (an ImageBitmap) for `detect`? Mock engines don't. */
@@ -76,12 +111,16 @@ export interface VisionService extends ServiceBase {
   detect(frame: VisionFrame, ctx: VisionContext): Promise<Detection[]>;
   /** Pure inference time of the last detect (ms), if the engine reports it. */
   lastInferMs?: number;
+  /** Tier-2: what exactly is this? Must return status 'unknown' rather than guess. */
+  identify(req: IdentifyRequest): Promise<Identification>;
   /** Slow path, called every few seconds or on scene change. */
   analyzeScene(frame: FrameSource, detections: Detection[], ctx: VisionContext): Promise<SceneAnalysis>;
   /** Text recognition for signs, menus, documents, screens. */
   ocr(frame: FrameSource, ctx: VisionContext): Promise<OcrResult>;
   dispose(): void;
 }
+
+export type VisionProvider = VisionService;
 
 // ─── Knowledge (entity profiles, places, products) ─────────────────────────
 
@@ -101,6 +140,9 @@ export interface PlacesService extends ServiceBase {
 
 export interface WorldContext {
   focus?: EntityProfile | null;
+  /** JPEG data URL of the focused target — only attached for image search of unknown objects. */
+  focusImage?: string;
+  location?: LocationEstimate | null;
   detections: Detection[];
   scene?: SceneAnalysis | null;
   geo?: GeoFix | null;
@@ -130,6 +172,7 @@ export type Grounding =
   | { kind: 'scene'; scene: SceneAnalysis | null }
   | { kind: 'social'; draft: SocialDraft }
   | { kind: 'ack'; action: string }
+  | { kind: 'link'; url: string | null; label: string; opened: boolean }
   | { kind: 'none' };
 
 export interface LLMService extends ServiceBase {

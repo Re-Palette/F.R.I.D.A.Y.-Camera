@@ -50,7 +50,7 @@ export const SERVICE_MODES: Record<ServiceName, ServiceMode[]> = {
 };
 
 export const SERVICE_DESCRIPTIONS: Record<ServiceName, string> = {
-  vision: 'Object detection / scene / OCR',
+  vision: 'LOCAL: 端末内検出 · CLOUD: 端末内検出 + クラウド識別',
   llm: 'Conversation & reasoning',
   search: 'Web search → rank → summarize',
   weather: 'Open-Meteo (no key)',

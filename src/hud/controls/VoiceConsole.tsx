@@ -126,6 +126,18 @@ export function VoiceConsole() {
 
 function Attachment({ kind }: { kind: string }) {
   const orch = useOrch();
+  const link = useFriday((s) => {
+    const a = s.conversation[s.conversation.length - 1]?.attachment;
+    return a?.kind === 'link' ? a : null;
+  });
+  if (kind === 'link' && link)
+    return (
+      <div style={{ marginTop: 6 }}>
+        <a className="chip orange" href={link.url} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>
+          {link.label} ↗
+        </a>
+      </div>
+    );
   const map: Record<string, [string, () => void]> = {
     search: ['SOURCES ▸', () => orch.openSheet('search')],
     memory: ['MEMORY ▸', () => orch.openSheet('memory')],

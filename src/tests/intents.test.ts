@@ -58,6 +58,15 @@ describe('classifyIntent', () => {
     expect(k('ここはどこ？')).toBe('scene');
   });
 
+  it('handles vision follow-ups', () => {
+    expect(k('公式サイト開いて')).toBe('open_url');
+    expect(k('ホームページを見せて')).toBe('open_url');
+    expect(k('いくら？')).toBe('product_info');
+    const i = classifyIntent('何の建物？', true);
+    expect(i.referential).toBe(true);
+    expect(classifyIntent('ここについて調べて', true).kind).toBe('search');
+  });
+
   it('strips the wake word', () => {
     expect(classifyIntent('ねえ FRIDAY、写真撮って', false).kind).toBe('capture_photo');
   });

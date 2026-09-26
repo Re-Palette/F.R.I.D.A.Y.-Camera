@@ -23,11 +23,13 @@ import type {
   Detection,
   EntityProfile,
   HudDensity,
+  LocationEstimate,
+  PlaceInfo,
   Intent,
   MemoryItem,
   SocialPlatform,
 } from '../core/types';
-import { boxCenter, boxContains, fmtDateJa, iou, sleep, timeOfDayFor, uid, viewToFrame } from '../core/util';
+import { boxCenter, boxContains, clamp, fmtDateJa, iou, sleep, timeOfDayFor, uid, viewToFrame } from '../core/util';
 import type { DemoScene, Grounding, ServiceRegistry, VisionContext, VisionFrame, VisionService, WorldContext } from '../services/contracts';
 import { toNavTarget } from '../services/places';
 import { createServices } from '../services/registry';
@@ -35,6 +37,8 @@ import { MockVisionService } from '../services/vision/MockVisionService';
 import { OnDeviceVisionService, RemoteVisionService } from '../services/vision/WorkerVisionService';
 import { getState, setState, type SheetKind, type Toast } from '../store/useFriday';
 import { evaluateHazards } from './hazards';
+import { IdentificationManager } from './identification';
+import { attachText, countObjects, detectLang, estimateLocation, geoAnchors, shownName } from '../services/vision/perception';
 import { classifyIntent } from './intents';
 
 const PRIMARY_ACQUIRE_MS = 450;
@@ -68,6 +72,15 @@ export class Orchestrator {
   private lastHeadingPush = 0;
   /** Pipeline 2: samples camera frames for AI, latest-frame-wins, never blocks the preview. */
   private readonly sampler: FrameSampler;
+  /** Tier-2 identification (cached per track, prioritised, budgeted). */
+  private readonly identifier: IdentificationManager;
+  private nearbyPlaces: PlaceInfo[] = [];
+  private sceneRegions: { dets: Detection[]; at: number } | null = null;
+  private textDets: Detection[] = [];
+  private textAt = 0;
+  private textById = new Map<string, string>();
+  private focusKey = '';
+  private lastSummaryAt = 0;
 
   constructor() {
     this.services = createServices(getState().serviceModes);
@@ -77,6 +90,13 @@ export class Orchestrator {
       (frame) => this.runVision(frame),
     );
     this.camera.onFeedElementChange = () => this.sampler.rebind();
+    this.identifier = new IdentificationManager({
+      vision: () => this.vision,
+      crop: (d) => this.cropTarget(d),
+      ctx: () => this.visionCtx(),
+      scene: () => getState().scene,
+      nearby: () => this.nearbyPlaces,
+    });
   }
 
   // ─── Lifecycle ─────────────────────────────────────────────────────────
@@ -311,7 +331,7 @@ export class Orchestrator {
 
   worldContext(): WorldContext {
     const s = getState();
-    return { focus: s.focus, detections: s.detections, scene: s.scene, geo: s.geo, weather: s.weather, now: new Date() };
+    return { focus: s.focus, detections: s.detections, scene: s.scene, geo: s.geo, weather: s.weather, location: s.location, now: new Date() };
   }
 
   /** Pipeline 2 body: runs for one sampled frame; only lightweight results reach the HUD. */
@@ -326,8 +346,57 @@ export class Orchestrator {
     perf.aiInferMs = this.vision.lastInferMs || performance.now() - t0;
     const v = this.vision as VisionService & { failed?: string | null; delegate?: string };
     perf.aiEngine = v.failed ? `${v.mode} ✕ ${v.failed.slice(0, 40)}` : `${v.mode}${v.delegate ? ` · ${v.delegate}` : ''}`;
-    trackRenderer.observe(dets, frame.capturedAt);
-    this.processDetections(dets);
+    const s = getState();
+    const merged = this.identifier.process(this.augment(dets), performance.now(), s.lockedId, s.primaryId);
+    trackRenderer.observe(merged, frame.capturedAt);
+    this.processDetections(merged);
+  }
+
+  /**
+   * Adds what the fast detector can't see: cloud scene regions (buildings,
+   * signs), free-standing OCR text, and GPS/compass building estimates.
+   * Everything stays lightweight metadata — no pixels.
+   */
+  private augment(dets: Detection[]): Detection[] {
+    const s = getState();
+    const now = performance.now();
+    const out = dets.map((d) => (this.textById.has(d.id) ? { ...d, text: this.textById.get(d.id) } : d));
+    if (this.sceneRegions && now - this.sceneRegions.at < 10000) {
+      out.push(...this.sceneRegions.dets.filter((r) => !out.some((d) => iou(d.bbox, r.bbox) > 0.5)));
+    }
+    if (now - this.textAt < 6000) out.push(...this.textDets);
+    if (this.camera.source === 'camera' && this.vision.mode !== 'mock' && s.mode === 'scan') {
+      const anchors = geoAnchors(s.pois, s.geo, live.heading || s.heading, { hfov: 55, now });
+      out.push(...anchors.filter((g) => !out.some((d) => (d.identity?.entityId ?? d.entityId) === g.entityId)));
+    }
+    return out;
+  }
+
+  /** GPU crop of one target for identification (≤ 512 px). Only on demand. */
+  private async cropTarget(d: Detection): Promise<ImageBitmap | null> {
+    const { w, h } = this.camera.frameSize;
+    if (!w || !h) return null;
+    const pad = 0.1;
+    const sx = clamp((d.bbox.x - d.bbox.w * pad) * w, 0, w - 2);
+    const sy = clamp((d.bbox.y - d.bbox.h * pad) * h, 0, h - 2);
+    const sw = clamp(d.bbox.w * (1 + 2 * pad) * w, 2, w - sx);
+    const sh = clamp(d.bbox.h * (1 + 2 * pad) * h, 2, h - sy);
+    const k = Math.min(1, 512 / Math.max(sw, sh));
+    return createImageBitmap(this.camera.frame, sx, sy, sw, sh, { resizeWidth: Math.round(sw * k), resizeHeight: Math.round(sh * k), resizeQuality: 'medium' }).catch(() => null);
+  }
+
+  private computeLocation(dets: Detection[]): LocationEstimate | null {
+    const s = getState();
+    const lm = dets
+      .filter((d) => (d.identity?.kind === 'landmark' || d.identity?.kind === 'building') && (d.identity.status === 'identified' || d.identity.status === 'possible'))
+      .sort((a, b) => (b.identity!.confidence ?? 0) - (a.identity!.confidence ?? 0))[0];
+    const sign = dets.find((d) => d.text)?.text ?? this.textDets[0]?.text ?? null;
+    return estimateLocation({
+      geo: s.geo,
+      landmark: lm ? { name: lm.identity!.name, confidence: lm.identity!.confidence, source: lm.identity!.source, area: s.scene?.location } : null,
+      signText: sign,
+      sceneLocation: s.scene?.location,
+    });
   }
 
   private processDetections(dets: Detection[]) {
@@ -391,21 +460,40 @@ export class Orchestrator {
       }
     }
 
-    const changedPrimary = primaryId !== s.primaryId;
     setState({ detections: dets, lockedId, lockState, primaryId, hazards });
-    if (changedPrimary) {
-      if (primaryId) {
-        const det = dets.find((d) => d.id === primaryId);
-        if (det) void this.loadFocus(det);
-      } else setState({ focus: null, related: [], news: [], recall: null });
+    // Refocus when the primary target changes *or* its identification progresses
+    // (TARGET DETECTED → IDENTIFYING → IDENTIFIED re-reads the profile).
+    const p = primaryId ? dets.find((d) => d.id === primaryId) : undefined;
+    const key = p ? `${p.id}|${p.identity?.status ?? ''}|${p.identity?.name ?? ''}` : primaryId ?? '';
+    if (key !== this.focusKey) {
+      this.focusKey = key;
+      if (p) void this.loadFocus(p);
+      else if (!primaryId) setState({ focus: null, related: [], news: [], recall: null });
+    }
+    if (now - this.lastSummaryAt > 1000) {
+      this.lastSummaryAt = now;
+      setState({ objectCounts: countObjects(dets.filter((d) => d.source !== 'ocr' && d.source !== 'geo')), location: this.computeLocation(dets) });
     }
   }
 
+  /**
+   * Profile for the focus card / Intel sheet / voice answers, keyed by the
+   * identification state so it upgrades as recognition progresses. Specific
+   * knowledge is only fetched once something is identified or possible.
+   */
   private profileFor(det: Detection): Promise<EntityProfile | null> {
-    const key = det.entityId ?? det.id;
+    const id = det.identity;
+    const status = id?.status ?? 'detected';
+    const key = `${id?.entityId ?? det.entityId ?? det.id}:${status}:${id?.name ?? ''}`;
     let p = this.profileCache.get(key);
     if (!p) {
-      p = this.services.knowledge.profile(det, this.visionCtx()).catch(() => null);
+      p = (async () => {
+        const specific = !!id && (status === 'identified' || status === 'possible') && det.category !== 'person';
+        const base = specific
+          ? await this.services.knowledge.profile({ ...det, entityId: id!.entityId ?? det.entityId, displayName: id!.name || det.displayName }, this.visionCtx()).catch(() => null)
+          : null;
+        return profileWithIdentity(base, det);
+      })();
       this.profileCache.set(key, p);
     }
     return p;
@@ -433,8 +521,10 @@ export class Orchestrator {
     this.lastSceneAt = Date.now();
     setState({ analyzingUntil: Date.now() + 1500 });
     try {
-      const scene = await this.vision.analyzeScene(this.camera.frame, getState().detections, this.visionCtx());
+      const scene = await this.vision.analyzeScene(this.camera.frame, getState().detections.filter((d) => d.source !== 'geo'), this.visionCtx());
       setState({ scene });
+      const at = performance.now();
+      this.sceneRegions = scene.regions?.length ? { at, dets: scene.regions.map((r, i) => ({ ...r, id: r.id || `region:${i}:${r.label}`, timestamp: at, source: 'cloud' as const })) } : null;
     } catch {
       /* keep previous scene */
     }
@@ -446,6 +536,12 @@ export class Orchestrator {
     this.lastSceneAt = Date.now() - SCENE_INTERVAL_MS + 1600;
     this.lastOcrText = '';
     trackRenderer.reset();
+    this.identifier.reset();
+    this.sceneRegions = null;
+    this.textDets = [];
+    this.textById.clear();
+    this.focusKey = '';
+    setState({ location: null, objectCounts: [] });
     setState({ detections: [], primaryId: null, lockedId: null, lockState: 'none', focus: null, related: [], news: [], hazards: [], ocr: null, translations: [], recall: null, scene: null });
     if (getState().mode === 'translate') this.later(() => void this.runTranslate(), 1200);
   }
@@ -460,9 +556,37 @@ export class Orchestrator {
       // 500 ms ticks: OCR every 3 s in TRANSLATE, POIs every 1 s in NAV (else every 20 s).
       if (s.mode === 'translate' && tick % 6 === 0) void this.runTranslate();
       if ((s.mode === 'nav' && tick % 2 === 0) || tick % 40 === 0) void this.refreshPois();
+      // Sign / text recognition in SCAN mode: every ~2.5 s, when the provider can read text.
+      if (s.mode === 'scan' && !s.sheet && tick % 5 === 2 && this.vision.capabilities.text !== 'none') void this.scanText();
       tick++;
       await sleep(500);
     }
+  }
+
+  private async scanText() {
+    const ocr = await this.vision.ocr(this.camera.frame, this.visionCtx()).catch(() => null);
+    if (!ocr) return;
+    const now = performance.now();
+    const hosts = getState().detections.filter((d) => d.source !== 'ocr' && d.source !== 'geo');
+    const { byId, free } = attachText(hosts, ocr.blocks);
+    this.textById = byId;
+    this.textAt = now;
+    this.textDets = free.slice(0, 3).map((b) => {
+      const lang = b.lang && b.lang !== 'und' ? b.lang : detectLang(b.text);
+      return {
+        id: `ocr:${b.text.slice(0, 32)}`,
+        label: 'text',
+        displayName: b.text,
+        subtitle: `テキスト · ${lang.toUpperCase()}`,
+        category: 'text' as const,
+        confidence: 0.9,
+        bbox: b.bbox,
+        timestamp: now,
+        source: 'ocr' as const,
+        text: b.text,
+        identity: { status: 'identified' as const, kind: 'text' as const, name: b.text, detail: lang.toUpperCase(), confidence: 0.9, source: 'ocr' as const, at: now },
+      };
+    });
   }
 
   private async onFirstFix() {
@@ -493,6 +617,7 @@ export class Orchestrator {
     this.lastPoiGeo = { lat: geo.lat, lon: geo.lon };
     try {
       const places = await this.services.places.nearby(geo);
+      this.nearbyPlaces = places;
       const pois = places.map((p) => toNavTarget(p, geo)).filter((p) => p.distanceM < 8000);
       const nav = getState().navTarget;
       setState({ pois, navTarget: nav ? (pois.find((p) => p.id === nav.id) ?? nav) : null });
@@ -547,6 +672,8 @@ export class Orchestrator {
     const target = det ?? s.detections.find((d) => d.id === s.primaryId);
     if (!target) return false;
     this.lockLastBox = target.bbox;
+    // A tapped target is the user's priority: identify it now (or retry an unknown).
+    if (!target.identity || target.identity.status === 'unknown') this.identifier.retry(target.id);
     setState({ lockedId: target.id, lockState: 'locked', primaryId: target.id });
     navigator.vibrate?.(20);
     void this.loadFocus(target);
@@ -636,10 +763,28 @@ export class Orchestrator {
       case 'place_info':
       case 'product_info': {
         if (!target) return { kind: 'profile', profile: s.focus };
-        const profile = await this.profileFor(target);
+        let subject = target;
+        // "これは何？" while identification is pending: kick it off now and wait briefly for tier 2.
+        if (target.category !== 'person' && target.source !== 'ocr' && (!target.identity || target.identity.status === 'identifying')) {
+          if (!target.identity) this.identifier.retry(target.id);
+          const until = performance.now() + 2500;
+          while (performance.now() < until && !signal.aborted) {
+            await sleep(150, signal);
+            const idn = this.identifier.identityOf(target.id);
+            if (idn && idn.status !== 'identifying') {
+              subject = { ...target, identity: idn };
+              break;
+            }
+          }
+        }
+        const profile = await this.profileFor(subject);
         if (profile && getState().focus?.id !== profile.id) {
           setState({ primaryId: target.id });
           void this.loadFocus(target);
+        }
+        // "いくら？" for something we recognised but hold no price for → Web Search.
+        if (intent.kind === 'product_info' && profile && !profile.product && /値段|価格|いくら|最安/.test(intent.text) && target.category !== 'person') {
+          return this.execute({ ...intent, kind: 'search', query: `${profile.name} 価格`, referential: false }, signal);
         }
         if (profile && (intent.kind === 'product_info' || intent.kind === 'place_info')) setState({ sheet: 'intel' });
         return { kind: 'profile', profile };
@@ -648,11 +793,33 @@ export class Orchestrator {
         return s.focus && intent.referential ? { kind: 'profile', profile: s.focus } : { kind: 'none' };
       case 'search': {
         const base = intent.query ?? intent.text;
-        const query = intent.referential && s.focus && !base.includes(s.focus.name) ? `${s.focus.name} ${base.replace(/(これ|それ|あれ|この|その|あの)(について)?/g, '').trim()}` : base;
+        const strip = (t: string) => t.replace(/(これ|それ|あれ|この|その|あの|ここ|そこ|この場所|この辺)(について|の)?/g, '').trim();
+        const ctx = this.worldContext();
+        let query = base;
+        if (/ここ|この場所|この辺|この辺り/.test(intent.text)) {
+          // "ここについて調べて" → the place: identified landmark / building first, then the location estimate.
+          const lm = s.detections.find((d) => (d.identity?.kind === 'landmark' || d.identity?.kind === 'building') && d.identity.status !== 'unknown' && d.identity.name);
+          const where = lm?.identity?.name ?? s.location?.name ?? s.geo?.area;
+          if (where) query = `${where} ${strip(base)}`.trim();
+        } else if (intent.referential && s.focus?.identity?.status === 'unknown' && target) {
+          // Unknown object → image search with a crop of the target.
+          const crop = await this.cropTarget(target);
+          if (crop) {
+            const c = document.createElement('canvas');
+            c.width = crop.width;
+            c.height = crop.height;
+            c.getContext('2d')!.drawImage(crop, 0, 0);
+            crop.close();
+            ctx.focusImage = c.toDataURL('image/jpeg', 0.8);
+          }
+          query = `画像検索: ${target.displayName}`;
+        } else if (intent.referential && s.focus && !base.includes(s.focus.name)) {
+          query = `${s.focus.name} ${strip(base)}`.trim();
+        }
         setState({ busy: 'searching', sheet: 'search', search: { query, stage: 'query' } });
         const answer = await this.services.search.search(
           query,
-          this.worldContext(),
+          ctx,
           (stage, detail) => setState({ search: { ...getState().search!, stage, detail } }),
           signal,
         );
@@ -714,6 +881,20 @@ export class Orchestrator {
       case 'scene':
         await this.analyzeScene();
         return { kind: 'scene', scene: getState().scene };
+      case 'open_url': {
+        const f = s.focus;
+        let url = f?.officialUrl ?? f?.identity?.officialUrl ?? f?.product?.officialUrl ?? f?.place?.website ?? null;
+        const label = f ? `${f.name} 公式サイト` : '公式サイト';
+        if (!url && f && f.category !== 'person' && f.identity?.status !== 'unknown') {
+          // Not in the knowledge base: find it (official-tier sources rank first).
+          const answer = await this.services.search.search(`${f.name} 公式サイト`, this.worldContext(), () => undefined, signal).catch(() => null);
+          url = answer?.sources.find((x) => x.tier === 'official')?.url ?? null;
+        }
+        if (!url) return { kind: 'link', url: null, label, opened: false };
+        // Voice results aren't a user gesture, so popups may be blocked — the reply also carries a button.
+        const w = window.open(url, '_blank', 'noopener');
+        return { kind: 'link', url, label, opened: !!w };
+      }
       case 'social': {
         const item = s.selectedMemory ?? (await this.services.memory.list(1))[0];
         if (!item) return { kind: 'ack', action: '投稿に使う写真がありません。先に撮影してください。' };
@@ -854,7 +1035,58 @@ function attachmentFor(g: Grounding): ChatAttachment | undefined {
       return { kind: 'translation', items: g.items };
     case 'social':
       return { kind: 'social', draft: g.draft };
+    case 'link':
+      return g.url ? { kind: 'link', url: g.url, label: g.label } : undefined;
     default:
       return undefined;
   }
+}
+
+/**
+ * Builds the focus profile for a detection at its current recognition stage.
+ * People never get more than "人物". Unknown objects say so plainly.
+ */
+function profileWithIdentity(base: EntityProfile | null, det: Detection): EntityProfile {
+  const id = det.identity;
+  const status = id?.status ?? 'detected';
+  if (det.category === 'person') {
+    return { id: det.id, name: '人物', subtitle: 'PERSON DETECTED', category: 'person', summary: '人物を検出しました。顔による個人の特定や、年齢・性別などの推定は行いません。', facts: [], keywords: [], identity: id };
+  }
+  if (base && id && (status === 'identified' || status === 'possible')) {
+    return { ...base, identity: id, officialUrl: base.officialUrl ?? id.officialUrl ?? base.place?.website ?? base.product?.officialUrl };
+  }
+  if (id && (status === 'identified' || status === 'possible')) {
+    return {
+      id: id.entityId ?? det.id,
+      name: id.name,
+      nameEn: id.nameEn,
+      subtitle: [det.displayName, id.detail].filter(Boolean).join(' / '),
+      category: det.category,
+      summary: id.detail ?? `${id.name}と推定されます。`,
+      facts: Object.entries(id.attributes ?? {}).map(([label, value]) => ({ key: label, label, value })),
+      keywords: [id.name, det.displayName],
+      officialUrl: id.officialUrl,
+      identity: id,
+    };
+  }
+  const name = shownName(det);
+  return {
+    id: det.id,
+    name,
+    subtitle: det.subtitle ?? det.category,
+    category: det.category,
+    summary:
+      status === 'identifying'
+        ? `${det.displayName}を識別しています…`
+        : status === 'unknown'
+          ? '何かは特定できませんでした。「これについて調べて」と話しかけると画像検索します。'
+          : `${det.displayName}を検出しました（信頼度 ${Math.round(det.confidence * 100)}%）。`,
+    facts: [
+      { key: 'class', label: '分類', value: det.displayName },
+      { key: 'conf', label: '検出信頼度', value: `${Math.round(det.confidence * 100)}%` },
+      ...(det.text ? [{ key: 'text', label: '文字', value: det.text }] : []),
+    ],
+    keywords: [det.displayName],
+    identity: id,
+  };
 }

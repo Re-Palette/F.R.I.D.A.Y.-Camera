@@ -1,4 +1,5 @@
 import { relativeJa } from '../../core/util';
+import { headline, shownConfidence } from '../../services/vision/perception';
 import { TIER_LABEL } from '../../services/search/ranking';
 import { primaryDetection, useFriday } from '../../store/useFriday';
 import { useOrch } from '../hooks';
@@ -25,21 +26,54 @@ export function IntelSheet() {
         <p className="dim">対象が認識されていません。カメラを対象に向けてください。</p>
       ) : (
         <>
-          <div className="label">{f.subtitle}</div>
+          <div className="label">
+            <span className={`obj-head st-${f.identity?.status ?? 'detected'}`}>{det ? headline(det) : f.subtitle}</span>
+            <span className="sub">{f.subtitle}</span>
+          </div>
           <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, margin: '4px 0 8px' }}>
             <span style={{ fontSize: 22, fontWeight: 700 }}>{f.name}</span>
             {f.nameEn && f.nameEn !== f.name && <span className="dim">{f.nameEn}</span>}
             {det && (
               <span className="glow-o num" style={{ marginLeft: 'auto', fontSize: 20 }}>
-                {Math.round(det.confidence * 100)}%
+                {Math.round(shownConfidence(det) * 100)}%
               </span>
             )}
           </div>
           <p>{f.summary}</p>
+          {f.identity && det && (
+            <>
+              <h3>Recognition</h3>
+              <dl className="kv">
+                <FragmentKV k="検出（Tier 1）" v={`${det.displayName} · ${Math.round(det.confidence * 100)}% · ${det.source ?? 'local'}`} />
+                <FragmentKV
+                  k="識別（Tier 2）"
+                  v={
+                    f.identity.status === 'identifying'
+                      ? '識別中…'
+                      : f.identity.status === 'unknown'
+                        ? `不明（${Math.round(f.identity.confidence * 100)}%）`
+                        : f.identity.status === 'detected'
+                          ? '未識別（クラウド接続で詳細識別）'
+                          : `${f.identity.name} · ${Math.round(f.identity.confidence * 100)}% · ${f.identity.status === 'possible' ? 'POSSIBLE' : 'IDENTIFIED'} · ${f.identity.source}`
+                  }
+                />
+                {f.identity.candidates && <FragmentKV k="候補" v={f.identity.candidates.map((c) => `${c.name} ${Math.round(c.confidence * 100)}%`).join(' / ')} />}
+                {Object.entries(f.identity.attributes ?? {}).map(([k, v]) => (
+                  <FragmentKV key={k} k={k} v={v} />
+                ))}
+                {det.text && <FragmentKV k="文字" v={det.text} />}
+              </dl>
+            </>
+          )}
           <div className="row-actions">
             <button className="btn primary" onClick={() => ask('これについて調べて')}>
-              <Icon.Search size={14} /> 調べる
+              <Icon.Search size={14} /> {f.identity?.status === 'unknown' ? '画像で調べる' : '調べる'}
             </button>
+            {f.officialUrl && (
+              <a className="btn" href={f.officialUrl} target="_blank" rel="noopener noreferrer">
+                <Icon.External size={14} /> 公式サイト
+              </a>
+            )}
             {f.place && (
               <button className="btn" onClick={() => ask(`${f.place!.name}までナビして`)}>
                 <Icon.Nav size={14} /> ナビ

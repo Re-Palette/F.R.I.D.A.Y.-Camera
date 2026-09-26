@@ -6,7 +6,7 @@
  */
 import type { DemoScene } from '../../services/contracts';
 import { onFrame } from '../../perf/frameLoop';
-import { DEMO_MENU_LINES, streetCarBox, sway } from './geometry';
+import { DEMO_MENU_LINES, cityCarBox, cityWalkerBox, streetCarBox, sway } from './geometry';
 
 type Ctx = CanvasRenderingContext2D;
 
@@ -682,18 +682,306 @@ function streetDynamic(c: Ctx, W: number, H: number, t: number) {
   c.fillRect(px + W * 0.004, py + H * 0.15, W * 0.014, H * 0.11);
 }
 
+
+// ─── Scene: city (Ariake, facing Tokyo Big Sight) ──────────────────────────
+
+function drawCar(c: Ctx, x: number, y: number, w: number, h: number, body: string, lights = true) {
+  c.fillStyle = body;
+  rr(c, x, y + h * 0.35, w, h * 0.5, h * 0.14);
+  c.fill();
+  c.fillStyle = 'rgba(0,0,0,0.35)';
+  rr(c, x + w * 0.2, y + h * 0.05, w * 0.55, h * 0.4, h * 0.14);
+  c.fill();
+  c.fillStyle = 'rgba(140,190,235,0.45)';
+  c.fillRect(x + w * 0.26, y + h * 0.1, w * 0.2, h * 0.28);
+  c.fillRect(x + w * 0.5, y + h * 0.1, w * 0.2, h * 0.28);
+  c.fillStyle = '#08090d';
+  for (const wx of [x + w * 0.2, x + w * 0.8]) {
+    c.beginPath();
+    c.arc(wx, y + h * 0.86, h * 0.15, 0, Math.PI * 2);
+    c.fill();
+  }
+  if (lights) {
+    c.fillStyle = 'rgba(255,245,220,0.95)';
+    c.fillRect(x + w * 0.96, y + h * 0.45, w * 0.04, h * 0.1);
+    c.fillStyle = 'rgba(255,60,50,0.9)';
+    c.fillRect(x, y + h * 0.45, w * 0.03, h * 0.1);
+  }
+}
+
+function drawPerson(c: Ctx, x: number, y: number, w: number, h: number, t: number, phase: number) {
+  const step = Math.sin(t * 4 + phase) * w * 0.12;
+  c.fillStyle = '#0b0d15';
+  c.beginPath();
+  c.arc(x + w / 2, y + h * 0.1, w * 0.26, 0, Math.PI * 2);
+  c.fill();
+  rr(c, x + w * 0.18, y + h * 0.2, w * 0.64, h * 0.45, w * 0.2);
+  c.fill();
+  c.fillRect(x + w * 0.26 + step, y + h * 0.62, w * 0.2, h * 0.38);
+  c.fillRect(x + w * 0.54 - step, y + h * 0.62, w * 0.2, h * 0.38);
+}
+
+function cityStatic(c: Ctx, W: number, H: number) {
+  const sky = c.createLinearGradient(0, 0, 0, H * 0.5);
+  sky.addColorStop(0, '#0a1433');
+  sky.addColorStop(0.55, '#3a2f63');
+  sky.addColorStop(0.85, '#c26a55');
+  sky.addColorStop(1, '#f2a466');
+  c.fillStyle = sky;
+  c.fillRect(0, 0, W, H * 0.5);
+  const r = rng(51);
+  // distant towers
+  for (let i = 0; i < 16; i++) {
+    const bx = r() * W;
+    const bh = H * (0.08 + r() * 0.16);
+    c.fillStyle = '#161a33';
+    c.fillRect(bx, H * 0.47 - bh, W * (0.04 + r() * 0.05), bh + 2);
+    for (let k = 0; k < 10; k++) {
+      c.fillStyle = `rgba(255,205,140,${0.2 + r() * 0.5})`;
+      c.fillRect(bx + W * r() * 0.04, H * 0.47 - bh + r() * bh, W * 0.004, H * 0.003);
+    }
+  }
+  // Tokyo Big Sight: four inverted pyramids on a podium
+  const baseY = H * 0.45;
+  c.fillStyle = '#23283d';
+  c.fillRect(W * 0.14, baseY - H * 0.02, W * 0.72, H * 0.04);
+  for (let i = 0; i < 4; i++) {
+    const cx = W * (0.25 + i * 0.165);
+    const topY = H * 0.2;
+    const botY = H * 0.36;
+    const halfTop = W * 0.08;
+    const halfBot = W * 0.025;
+    const g = c.createLinearGradient(0, topY, 0, botY);
+    g.addColorStop(0, '#b9c0d6');
+    g.addColorStop(1, '#6d7590');
+    c.fillStyle = g;
+    c.beginPath();
+    c.moveTo(cx - halfTop, topY);
+    c.lineTo(cx + halfTop, topY);
+    c.lineTo(cx + halfBot, botY);
+    c.lineTo(cx - halfBot, botY);
+    c.closePath();
+    c.fill();
+    c.strokeStyle = 'rgba(40,50,80,0.55)';
+    c.lineWidth = Math.max(0.6, W * 0.0012);
+    for (let k = 1; k < 6; k++) {
+      const yy = topY + ((botY - topY) * k) / 6;
+      const hw = halfTop + ((halfBot - halfTop) * k) / 6;
+      c.beginPath();
+      c.moveTo(cx - hw, yy);
+      c.lineTo(cx + hw, yy);
+      c.stroke();
+    }
+    c.fillStyle = 'rgba(255,215,160,0.55)';
+    c.fillRect(cx - halfTop, topY + (botY - topY) * 0.15, halfTop * 2, H * 0.004);
+    // supporting pillar
+    c.fillStyle = '#3a4058';
+    c.fillRect(cx - W * 0.012, botY, W * 0.024, baseY - botY - H * 0.02);
+  }
+  // glass entrance hall
+  c.fillStyle = 'rgba(120,170,220,0.35)';
+  c.fillRect(W * 0.2, baseY - H * 0.05, W * 0.6, H * 0.03);
+  // sidewalk + road
+  c.fillStyle = '#202333';
+  c.fillRect(0, baseY + H * 0.02, W, H * 0.13);
+  const road = c.createLinearGradient(0, H * 0.58, 0, H);
+  road.addColorStop(0, '#191b24');
+  road.addColorStop(1, '#0c0d12');
+  c.fillStyle = road;
+  c.fillRect(0, H * 0.58, W, H * 0.42);
+  c.fillStyle = 'rgba(235,235,220,0.7)';
+  for (let x = 0; x < W; x += W * 0.12) c.fillRect(x, H * 0.705, W * 0.06, H * 0.006);
+  for (let i = 0; i < 7; i++) c.fillRect(W * (0.3 + i * 0.06), H * 0.83, W * 0.035, H * 0.09);
+  // traffic light pole
+  c.fillStyle = '#2b2f3c';
+  c.fillRect(W * 0.925, H * 0.28, W * 0.006, H * 0.3);
+  c.fillStyle = '#10121a';
+  rr(c, W * 0.905, H * 0.28, W * 0.045, H * 0.12, W * 0.008);
+  c.fill();
+  // street sign (JP + EN)
+  c.fillStyle = '#0d5a3a';
+  rr(c, W * 0.03, H * 0.34, W * 0.3, H * 0.075, W * 0.008);
+  c.fill();
+  c.strokeStyle = 'rgba(255,255,255,0.8)';
+  c.lineWidth = Math.max(1, W * 0.002);
+  c.strokeRect(W * 0.036, H * 0.345, W * 0.288, H * 0.065);
+  c.fillStyle = '#ffffff';
+  c.textAlign = 'left';
+  c.textBaseline = 'middle';
+  c.font = `700 ${Math.round(W * 0.03)}px 'Noto Sans JP', sans-serif`;
+  c.fillText('東京ビッグサイト', W * 0.045, H * 0.364);
+  c.font = `600 ${Math.round(W * 0.022)}px Rajdhani, sans-serif`;
+  c.fillText('Tokyo Big Sight  →', W * 0.045, H * 0.392);
+  c.fillStyle = '#1b2a4a';
+  c.fillRect(W * 0.035, H * 0.425, W * 0.12, H * 0.03);
+  c.fillStyle = '#e8f0ff';
+  c.font = `600 ${Math.round(W * 0.02)}px 'Noto Sans JP', sans-serif`;
+  c.fillText('有明 Ariake', W * 0.042, H * 0.44);
+  c.fillStyle = '#2b2f3c';
+  c.fillRect(W * 0.17, H * 0.415, W * 0.006, H * 0.1);
+  // parked car (Prius-like silhouette)
+  drawCar(c, W * 0.64, H * 0.61, W * 0.32, H * 0.115, '#8a95a8', false);
+  // the odd object on the road side
+  c.fillStyle = '#5b5f6e';
+  c.beginPath();
+  c.moveTo(W * 0.6, H * 0.805);
+  c.lineTo(W * 0.63, H * 0.745);
+  c.lineTo(W * 0.675, H * 0.76);
+  c.lineTo(W * 0.66, H * 0.805);
+  c.closePath();
+  c.fill();
+  c.fillStyle = 'rgba(120,230,255,0.6)';
+  c.fillRect(W * 0.628, H * 0.77, W * 0.012, H * 0.008);
+}
+
+function cityDynamic(c: Ctx, W: number, H: number, t: number) {
+  // traffic light cycles
+  const phase = Math.floor(t / 4) % 2;
+  c.fillStyle = phase === 0 ? '#3dff7a' : '#2a1a14';
+  c.beginPath();
+  c.arc(W * 0.9275, H * 0.3, W * 0.012, 0, Math.PI * 2);
+  c.fill();
+  c.fillStyle = phase === 1 ? '#ff4040' : '#2a1414';
+  c.beginPath();
+  c.arc(W * 0.9275, H * 0.375, W * 0.012, 0, Math.PI * 2);
+  c.fill();
+  // moving car
+  const b = cityCarBox(t);
+  drawCar(c, b.x * W, b.y * H, b.w * W, b.h * H, '#e8ecf2');
+  // pedestrians
+  drawPerson(c, W * 0.035, H * 0.49, W * 0.06, H * 0.2, t, 0);
+  drawPerson(c, W * 0.105, H * 0.51, W * 0.055, H * 0.18, t, 1.3);
+  const wk = cityWalkerBox(t);
+  drawPerson(c, wk.x * W, wk.y * H, wk.w * W, wk.h * H, t, 2.1);
+  // bicycle
+  const bx = W * 0.44;
+  const by = H * 0.655;
+  c.strokeStyle = '#c9d2e6';
+  c.lineWidth = Math.max(1.2, W * 0.003);
+  for (const wx of [bx + W * 0.025, bx + W * 0.115]) {
+    c.beginPath();
+    c.arc(wx, by + H * 0.06, W * 0.024, 0, Math.PI * 2);
+    c.stroke();
+  }
+  c.beginPath();
+  c.moveTo(bx + W * 0.025, by + H * 0.06);
+  c.lineTo(bx + W * 0.06, by + H * 0.025);
+  c.lineTo(bx + W * 0.1, by + H * 0.025);
+  c.lineTo(bx + W * 0.115, by + H * 0.06);
+  c.moveTo(bx + W * 0.06, by + H * 0.025);
+  c.lineTo(bx + W * 0.07, by + H * 0.06);
+  c.stroke();
+}
+
+function drawHeadphones(c: Ctx, W: number, H: number) {
+  const cx = W * 0.47;
+  const cy = H * 0.84;
+  c.strokeStyle = '#2a2d36';
+  c.lineWidth = W * 0.012;
+  c.beginPath();
+  c.ellipse(cx, cy, W * 0.1, H * 0.05, 0, Math.PI * 1.05, Math.PI * 1.95);
+  c.stroke();
+  for (const dx of [-0.105, 0.105]) {
+    c.fillStyle = '#1c1e25';
+    c.beginPath();
+    c.ellipse(cx + W * dx, cy + H * 0.012, W * 0.028, H * 0.03, 0, 0, Math.PI * 2);
+    c.fill();
+    c.fillStyle = 'rgba(200,170,120,0.35)';
+    c.fillRect(cx + W * dx - W * 0.008, cy, W * 0.016, H * 0.004);
+  }
+}
+
+function drawMonstera(c: Ctx, W: number, H: number) {
+  c.fillStyle = '#6b4a36';
+  c.beginPath();
+  c.moveTo(W * 0.05, H * 0.47);
+  c.lineTo(W * 0.17, H * 0.47);
+  c.lineTo(W * 0.155, H * 0.56);
+  c.lineTo(W * 0.065, H * 0.56);
+  c.closePath();
+  c.fill();
+  const leaves: [number, number, number, number][] = [
+    [0.07, 0.3, 0.07, -0.5],
+    [0.14, 0.26, 0.075, 0.4],
+    [0.1, 0.21, 0.06, 0.1],
+    [0.045, 0.38, 0.05, -0.9],
+    [0.17, 0.36, 0.05, 0.9],
+  ];
+  for (const [x, y, r, rot] of leaves) {
+    c.save();
+    c.translate(W * x, H * y);
+    c.rotate(rot);
+    c.fillStyle = '#1f6b3a';
+    c.beginPath();
+    c.ellipse(0, 0, W * r, W * r * 0.8, 0, 0, Math.PI * 2);
+    c.fill();
+    c.strokeStyle = '#0e2a18';
+    c.lineWidth = Math.max(1, W * 0.004);
+    for (let k = -2; k <= 2; k++) {
+      c.beginPath();
+      c.moveTo(W * r * 0.3, k * W * r * 0.25);
+      c.lineTo(W * r, k * W * r * 0.38);
+      c.stroke();
+    }
+    c.restore();
+    c.strokeStyle = '#2c5a36';
+    c.lineWidth = Math.max(1, W * 0.004);
+    c.beginPath();
+    c.moveTo(W * 0.11, H * 0.47);
+    c.lineTo(W * x, H * y);
+    c.stroke();
+  }
+}
+
+function drawCat(c: Ctx, W: number, H: number, t: number) {
+  const x = W * 0.87;
+  const y = H * 0.8;
+  c.fillStyle = '#1a1512';
+  c.beginPath();
+  c.ellipse(x + W * 0.055, y + H * 0.05, W * 0.04, H * 0.022, 0, 0, Math.PI * 2);
+  c.fill();
+  c.beginPath();
+  c.arc(x + W * 0.02, y + H * 0.028, W * 0.018, 0, Math.PI * 2);
+  c.fill();
+  c.beginPath();
+  c.moveTo(x + W * 0.008, y + H * 0.018);
+  c.lineTo(x + W * 0.01, y);
+  c.lineTo(x + W * 0.02, y + H * 0.012);
+  c.lineTo(x + W * 0.03, y);
+  c.lineTo(x + W * 0.032, y + H * 0.018);
+  c.fill();
+  c.strokeStyle = '#1a1512';
+  c.lineWidth = W * 0.007;
+  c.beginPath();
+  c.moveTo(x + W * 0.092, y + H * 0.05);
+  c.quadraticCurveTo(x + W * 0.1, y + H * (0.01 + Math.sin(t * 2) * 0.008), x + W * 0.085, y);
+  c.stroke();
+  c.fillStyle = 'rgba(190,255,120,0.9)';
+  c.fillRect(x + W * 0.013, y + H * 0.025, W * 0.004, H * 0.003);
+  c.fillRect(x + W * 0.024, y + H * 0.025, W * 0.004, H * 0.003);
+}
+
 const STATIC: Record<DemoScene, (c: Ctx, W: number, H: number) => void> = {
   odaiba: odaibaStatic,
-  desk: deskStatic,
+  city: cityStatic,
+  desk: (c, W, H) => {
+    deskStatic(c, W, H);
+    drawMonstera(c, W, H);
+    drawHeadphones(c, W, H);
+  },
   menu: menuStatic,
   street: streetStatic,
 };
 
 const DYNAMIC: Record<DemoScene, (c: Ctx, W: number, H: number, t: number, st: number) => void> = {
   odaiba: odaibaDynamic,
+  city: cityDynamic,
   desk: deskDynamic,
   menu: () => {},
-  street: streetDynamic,
+  street: (c, W, H, t) => {
+    streetDynamic(c, W, H, t);
+    drawCat(c, W, H, t);
+  },
 };
 
 /** Render a single still of a demo scene (used for seeded memory thumbnails). */

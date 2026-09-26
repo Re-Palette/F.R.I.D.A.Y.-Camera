@@ -272,6 +272,136 @@ export const MOCK_ENTITIES: Record<string, MockEntity> = {
     facts: [{ key: 'motion', label: '動き', value: '歩行中' }],
     keywords: ['人物'],
   }),
+  // ─── City scene (Ariake) ───────────────────────────────────────────────
+  'big-sight': entity(
+    'big-sight',
+    'building',
+    'building',
+    0.9,
+    {
+      name: '東京ビッグサイト',
+      nameEn: 'Tokyo Big Sight',
+      subtitle: '建物 / 国際展示場',
+      summary: '正式名称は東京国際展示場。展示会・見本市・イベントに利用される日本最大級の展示施設で、逆三角形を4つ並べた会議棟が象徴的です。',
+      facts: [
+        { key: 'official', label: '正式名称', value: '東京国際展示場' },
+        { key: 'opened', label: '開業', value: '1996年4月' },
+        { key: 'use', label: '用途', value: '展示会・イベント・会議' },
+        { key: 'address', label: '所在地', value: '東京都江東区有明3-11-1' },
+      ],
+      place: place({
+        id: 'big-sight',
+        name: '東京ビッグサイト',
+        kind: 'landmark',
+        address: '東京都江東区有明3-11-1',
+        lat: 35.6298,
+        lon: 139.7942,
+        website: 'https://www.bigsight.jp/',
+        hours: 'イベントにより異なる',
+      }),
+      officialUrl: 'https://www.bigsight.jp/',
+      keywords: ['東京ビッグサイト', '有明', '展示会', 'イベント', '東京'],
+    },
+    [
+      { id: 'bs1', kind: 'event', title: '本日のイベント', detail: '開催中の展示会は公式サイトで確認できます' },
+      { id: 'bs2', kind: 'nearby', title: '最寄り駅', detail: 'りんかい線 国際展示場駅 / ゆりかもめ 東京ビッグサイト駅' },
+      { id: 'bs3', kind: 'history', title: '会議棟の建築', detail: '逆三角形を4つ組み合わせた特徴的な外観' },
+    ],
+    [{ title: '有明エリアで大型展示会、臨海部の交通に混雑見込み', source: 'Metro News', tier: 'news', url: 'https://example.com/news/ariake', topic: 'イベント', minutesAgo: 48 }],
+  ),
+  'car-tesla': entity('car-tesla', 'car', 'vehicle', 0.93, {
+    name: 'Tesla Model 3',
+    nameEn: 'Tesla Model 3',
+    subtitle: '車両 / 電気自動車（セダン）',
+    summary: 'Tesla の電気自動車（EV）セダン。外観シルエットからの推定です。',
+    facts: [
+      { key: 'maker', label: 'メーカー', value: 'Tesla' },
+      { key: 'type', label: '種別', value: '電気自動車（EV）セダン' },
+      { key: 'motion', label: '動き', value: '走行中（左→右）' },
+    ],
+    keywords: ['Tesla', 'Model 3', 'EV', '車'],
+  }),
+  'car-prius': entity('car-prius', 'car', 'vehicle', 0.91, {
+    name: 'Toyota Prius',
+    nameEn: 'Toyota Prius',
+    subtitle: '車両 / ハイブリッド車',
+    summary: 'トヨタのハイブリッド車の可能性があります（停車中・側面のみのため確信度は中程度）。',
+    facts: [
+      { key: 'maker', label: 'メーカー', value: 'トヨタ自動車' },
+      { key: 'type', label: '種別', value: 'ハイブリッド車' },
+      { key: 'motion', label: '動き', value: '停車中' },
+    ],
+    keywords: ['Prius', 'トヨタ', '車'],
+  }),
+  bicycle: entity('bicycle', 'bicycle', 'vehicle', 0.86, {
+    name: '自転車',
+    subtitle: '車両 / 自転車',
+    summary: '自転車を検出しました。',
+    facts: [{ key: 'motion', label: '動き', value: '停車中' }],
+    keywords: ['自転車'],
+  }),
+  'traffic-light': entity('traffic-light', 'traffic light', 'road', 0.84, {
+    name: '信号機',
+    subtitle: '道路 / 交通信号',
+    summary: '車両用の交通信号機です。',
+    facts: [{ key: 'kind', label: '種別', value: '車両用信号' }],
+    keywords: ['信号'],
+  }),
+  'sign-bigsight': entity('sign-bigsight', 'sign', 'sign', 0.9, {
+    name: '案内標識',
+    subtitle: '標識 / 日本語・英語',
+    summary: '「東京ビッグサイト Tokyo Big Sight →」「有明 Ariake」と書かれた案内標識です。',
+    facts: [
+      { key: 'text', label: '文字', value: '東京ビッグサイト / Tokyo Big Sight →' },
+      { key: 'lang', label: '言語', value: '日本語・英語' },
+    ],
+    keywords: ['標識', '東京ビッグサイト', '有明'],
+  }),
+  'unknown-box': entity('unknown-box', 'object', 'other', 0.52, {
+    name: '不明な物体',
+    subtitle: '物体 / 未識別',
+    summary: '形状からは何か特定できませんでした。「これについて調べて」で画像検索できます。',
+    facts: [],
+    keywords: [],
+  }),
+  'person-1': entity('person-1', 'person', 'person', 0.9, { name: '人物', subtitle: '人物', summary: '人物を検出しました。個人の特定は行いません。', facts: [], keywords: [] }),
+  'person-2': entity('person-2', 'person', 'person', 0.88, { name: '人物', subtitle: '人物', summary: '人物を検出しました。個人の特定は行いません。', facts: [], keywords: [] }),
+  'person-3': entity('person-3', 'person', 'person', 0.86, { name: '人物', subtitle: '人物', summary: '人物を検出しました。個人の特定は行いません。', facts: [], keywords: [] }),
+  // ─── Desk / street additions ───────────────────────────────────────────
+  headphones: entity('headphones', 'headphones', 'product', 0.9, {
+    name: 'SONY WH-1000XM6',
+    nameEn: 'Sony WH-1000XM6',
+    subtitle: '商品 / ワイヤレスヘッドホン',
+    summary: 'ソニーのワイヤレス・ノイズキャンセリングヘッドホン。価格は「いくら？」で検索します。',
+    facts: [
+      { key: 'maker', label: 'ブランド', value: 'SONY' },
+      { key: 'model', label: '型番', value: 'WH-1000XM6' },
+      { key: 'category', label: 'カテゴリー', value: 'ノイズキャンセリングヘッドホン' },
+    ],
+    officialUrl: 'https://www.sony.jp/headphone/',
+    keywords: ['SONY', 'WH-1000XM6', 'ヘッドホン'],
+  }),
+  monstera: entity('monstera', 'potted plant', 'plant', 0.88, {
+    name: 'モンステラ',
+    nameEn: 'Monstera deliciosa',
+    subtitle: '植物 / サトイモ科',
+    summary: '切れ込みの入った大きな葉が特徴の観葉植物。原産は中南米の熱帯地域です。',
+    facts: [
+      { key: 'sci', label: '学名', value: 'Monstera deliciosa' },
+      { key: 'family', label: '科', value: 'サトイモ科' },
+      { key: 'origin', label: '原産', value: '中南米' },
+    ],
+    keywords: ['モンステラ', '観葉植物'],
+  }),
+  cat: entity('cat', 'cat', 'animal', 0.95, {
+    name: '猫',
+    nameEn: 'Cat',
+    subtitle: '動物 / イエネコ',
+    summary: '猫（イエネコ）を検出しました。',
+    facts: [{ key: 'sci', label: '学名', value: 'Felis catus' }],
+    keywords: ['猫'],
+  }),
+
 };
 
 /** Points of interest around the mock location (Odaiba). */
@@ -283,6 +413,68 @@ export const MOCK_PLACES: PlaceInfo[] = [
   place({ id: 'rainbow-bridge', name: 'レインボーブリッジ', kind: 'landmark', address: '東京都港区海岸3丁目', lat: 35.6365, lon: 139.7632 }),
   place({ id: 'tokyo-tower', name: '東京タワー', kind: 'landmark', address: '東京都港区芝公園4-2-8', lat: 35.6586, lon: 139.7454 }),
   place({ id: 'odaiba-park', name: 'お台場海浜公園', kind: 'park', address: '東京都港区台場1-4', lat: 35.6303, lon: 139.7762, openNow: true }),
+  place({ id: 'big-sight', name: '東京ビッグサイト', kind: 'landmark', address: '東京都江東区有明3-11-1', lat: 35.6298, lon: 139.7942, website: 'https://www.bigsight.jp/' }),
 ];
 
 export const MOCK_GEO = { lat: 35.6284, lon: 139.7737, altitude: 12, accuracy: 8, speed: 0.4, placeName: '東京湾 港区', area: 'お台場' };
+
+/**
+ * Tier-1 (what the fast detector says) → tier-2 (what identification says)
+ * for each demo object. `delayMs` simulates cloud identification latency.
+ */
+export interface MockIdentitySpec {
+  generic: string;
+  kind: import('../../core/types').IdentityKind;
+  name: string;
+  nameEn?: string;
+  confidence: number;
+  detail?: string;
+  candidates?: { name: string; confidence: number }[];
+  attributes?: Record<string, string>;
+  delayMs: number;
+}
+
+export const MOCK_IDENTITY: Record<string, MockIdentitySpec> = {
+  'rainbow-bridge': { generic: '橋', kind: 'landmark', name: 'レインボーブリッジ', nameEn: 'Rainbow Bridge', confidence: 0.95, detail: '吊り橋 / 1993年開通', delayMs: 900 },
+  'tokyo-tower': { generic: '塔', kind: 'landmark', name: '東京タワー', nameEn: 'Tokyo Tower', confidence: 0.91, detail: '電波塔 / 333 m', delayMs: 1200 },
+  yakatabune: { generic: '船', kind: 'vehicle', name: '屋形船', confidence: 0.74, detail: '観光クルーズ船の可能性', delayMs: 1400 },
+  'big-sight': { generic: '建物', kind: 'building', name: '東京ビッグサイト', nameEn: 'Tokyo Big Sight', confidence: 0.94, detail: '国際展示場 / 江東区有明', delayMs: 1500 },
+  'car-tesla': { generic: '乗用車', kind: 'vehicle', name: 'Tesla Model 3', confidence: 0.87, detail: '電気自動車（セダン）', attributes: { メーカー: 'Tesla' }, delayMs: 1100 },
+  'car-prius': {
+    generic: '乗用車',
+    kind: 'vehicle',
+    name: 'Toyota Prius',
+    confidence: 0.62,
+    detail: 'ハイブリッド車の可能性',
+    candidates: [
+      { name: 'Toyota Prius', confidence: 0.62 },
+      { name: 'Toyota Aqua', confidence: 0.21 },
+    ],
+    delayMs: 1300,
+  },
+  bicycle: { generic: '自転車', kind: 'vehicle', name: '自転車', confidence: 0.86, detail: 'シティサイクル', delayMs: 800 },
+  'traffic-light': { generic: '信号機', kind: 'generic', name: '信号機', confidence: 0.84, detail: '車両用', delayMs: 700 },
+  'sign-bigsight': { generic: '標識', kind: 'text', name: '東京ビッグサイト Tokyo Big Sight →', confidence: 0.9, detail: '日本語 / 英語', delayMs: 600 },
+  'unknown-box': { generic: '物体', kind: 'generic', name: '', confidence: 0.31, detail: '形状から特定できません', delayMs: 1600 },
+  laptop: { generic: 'ノートPC', kind: 'product', name: 'Nova Book Pro 14', confidence: 0.89, detail: 'Aether Labs（デモ用架空製品）', delayMs: 1000 },
+  headphones: { generic: 'ヘッドホン', kind: 'product', name: 'SONY WH-1000XM6', nameEn: 'Sony WH-1000XM6', confidence: 0.96, detail: 'ワイヤレス NC ヘッドホン', attributes: { ブランド: 'SONY', 型番: 'WH-1000XM6' }, delayMs: 1200 },
+  smartphone: { generic: 'スマートフォン', kind: 'product', name: 'Aether Phone 9', confidence: 0.71, detail: 'デモ用架空製品', delayMs: 1100 },
+  coffee: {
+    generic: 'カップ',
+    kind: 'food',
+    name: 'カフェラテ',
+    confidence: 0.64,
+    detail: '推定材料: エスプレッソ・スチームミルク',
+    candidates: [
+      { name: 'カフェラテ', confidence: 0.64 },
+      { name: 'カプチーノ', confidence: 0.24 },
+    ],
+    delayMs: 900,
+  },
+  monstera: { generic: '観葉植物', kind: 'plant', name: 'モンステラ', nameEn: 'Monstera deliciosa', confidence: 0.91, detail: 'サトイモ科', attributes: { 学名: 'Monstera deliciosa' }, delayMs: 1300 },
+  cat: { generic: '猫', kind: 'animal', name: '猫', nameEn: 'Cat', confidence: 0.99, detail: 'イエネコ', delayMs: 500 },
+  menu: { generic: 'テキスト', kind: 'text', name: 'CAFÉ DU PONT メニュー', confidence: 0.96, detail: 'フランス語', delayMs: 600 },
+  car: { generic: '乗用車', kind: 'vehicle', name: 'セダン', confidence: 0.58, detail: 'ヘッドライトのみで車種は判別困難', delayMs: 1000 },
+  cone: { generic: 'コーン', kind: 'generic', name: '工事用コーン', confidence: 0.9, delayMs: 600 },
+  'cafe-lumen': { generic: '看板', kind: 'building', name: 'Café Lumen', confidence: 0.89, detail: 'カフェ（デモ用架空店舗）', delayMs: 900 },
+};

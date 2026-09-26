@@ -9,7 +9,7 @@ function factAnswer(p: EntityProfile, text: string): string | null {
   const f = (k: string) => p.facts.find((x) => x.key === k)?.value;
   if (/いつ|何年|できた|開通|完成|建て/.test(text)) {
     const v = f('opened');
-    if (v) return `${p.name}は${v}に${p.id === 'tokyo-tower' ? '完成' : '開通'}しました。`;
+    if (v) return `${p.name}は${v}に${p.id === 'tokyo-tower' ? '完成' : p.id === 'big-sight' ? '開業' : '開通'}しました。`;
   }
   if (/高さ|高い|何メートル/.test(text) && f('height')) return `${p.name}の高さは${f('height')}です。`;
   if (/長さ|全長|長い/.test(text) && f('length')) return `${p.name}の全長は${f('length')}です。`;
@@ -23,7 +23,32 @@ function factAnswer(p: EntityProfile, text: string): string | null {
     if (p.place?.rating) return `評価は★${p.place.rating}（${p.place.reviewCount?.toLocaleString()}件）です。`;
   }
   if (/メーカー|どこの/.test(text) && p.product) return `${p.product.maker}の製品です。`;
+  if (/メーカー|どこの|ブランド/.test(text) && (f('maker') || p.identity?.attributes?.['ブランド'] || p.identity?.attributes?.['メーカー']))
+    return `${f('maker') ?? p.identity?.attributes?.['ブランド'] ?? p.identity?.attributes?.['メーカー']}の製品です。`;
+  if (/何の|なんの|用途|何に使/.test(text)) {
+    const use = f('use');
+    return use ? `${p.summary.split('。')[0]}。主な用途は${use}です。` : `${p.summary.split('。')[0]}。`;
+  }
+  if (/学名/.test(text) && (f('sci') || p.identity?.attributes?.['学名'])) return `学名は${f('sci') ?? p.identity?.attributes?.['学名']}です。`;
   return null;
+}
+
+/**
+ * Uncertainty-aware naming. Never overstates: IDENTIFIED → 推定されます,
+ * POSSIBLE → 可能性があります (with %), UNKNOWN → 特定できません. People are
+ * only ever "人物".
+ */
+export function identityPhrase(p: EntityProfile): string {
+  const id = p.identity;
+  const pct = id ? Math.round(id.confidence * 100) : 0;
+  if (p.category === 'person' || id?.kind === 'person') return '人物を検出しました。個人の特定は行いません。';
+  if (!id || id.status === 'detected') return `${p.name}を検出しています。`;
+  if (id.status === 'identifying') return `${p.name}を識別中です。`;
+  if (id.status === 'unknown') return `何かは特定できませんでした（確信度${pct}%）。「これについて調べて」と言えば画像検索します。`;
+  const brand = id.attributes?.['ブランド'];
+  const label = brand && !p.name.toUpperCase().startsWith(brand.toUpperCase()) ? `${brand}の${p.name}` : p.name;
+  if (id.status === 'possible') return `${label}の可能性があります（確信度${pct}%）。`;
+  return `${label}と推定されます。`;
 }
 
 /** Turns grounded tool output into a short, spoken-style Japanese answer. */
@@ -35,10 +60,13 @@ export function verbalize(intent: Intent, g: Grounding | undefined, ctx: WorldCo
       if (!p) return '対象を特定できませんでした。もう少し近づけてみてください。';
       if (intent.kind === 'identify' || intent.kind === 'place_info' || intent.kind === 'product_info') {
         const extra = p.product ? `価格は¥${p.product.priceJPY.toLocaleString()}前後です。` : p.place?.hours ? `営業時間は${p.place.hours}。` : '';
-        return `${p.name}です。${p.summary.split('。')[0]}。${extra}`;
+        return `${identityPhrase(p)}${p.identity?.status === 'identified' || p.identity?.status === 'possible' ? p.summary.split('。')[0] + '。' : ''}${extra}`;
       }
-      return factAnswer(p, intent.text) ?? `${p.name}です。${p.summary}`;
+      return factAnswer(p, intent.text) ?? `${identityPhrase(p)}${p.summary}`;
     }
+    case 'link':
+      if (!g.url) return '公式サイトが見つかりませんでした。「詳しく調べて」で検索できます。';
+      return g.opened ? `${g.label}を開きます。` : `${g.label}のリンクを表示しました。タップして開いてください。`;
     case 'search':
       return g.answer.summary;
     case 'weather': {

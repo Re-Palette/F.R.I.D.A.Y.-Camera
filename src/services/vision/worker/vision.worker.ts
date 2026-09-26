@@ -135,6 +135,23 @@ function remote(apiBase: string): Engine {
   };
 }
 
+// ─── On-device text detection (Shape Detection API) ──────────────────────────
+
+interface TextDetectorLike {
+  detect(src: ImageBitmap): Promise<{ rawValue: string; boundingBox: DOMRectReadOnly }[]>;
+}
+let td: TextDetectorLike | null | undefined;
+function textDetector(): TextDetectorLike | null {
+  if (td !== undefined) return td;
+  const Ctor = (self as unknown as { TextDetector?: new () => TextDetectorLike }).TextDetector;
+  try {
+    td = Ctor ? new Ctor() : null;
+  } catch {
+    td = null;
+  }
+  return td;
+}
+
 // ─── Message loop ───────────────────────────────────────────────────────────
 
 let engine: Engine | null = null;
@@ -148,10 +165,10 @@ ctx.onmessage = async (e: MessageEvent<ToWorker>) => {
       if (msg.engine === 'mediapipe') {
         const m = await mediapipe();
         engine = m.engine;
-        post({ type: 'ready', engine: msg.engine, delegate: m.delegate });
+        post({ type: 'ready', engine: msg.engine, delegate: m.delegate, textSupported: !!textDetector() });
       } else {
         engine = remote(msg.apiBase);
-        post({ type: 'ready', engine: msg.engine });
+        post({ type: 'ready', engine: msg.engine, textSupported: !!textDetector() });
       }
     } catch (err) {
       post({ type: 'error', message: `init ${kind}: ${(err as Error).message}` });
@@ -160,6 +177,26 @@ ctx.onmessage = async (e: MessageEvent<ToWorker>) => {
   }
   if (msg.type === 'reset') {
     engine?.reset();
+    return;
+  }
+  if (msg.type === 'text') {
+    // On-device OCR via the Shape Detection API when the platform ships it.
+    try {
+      const td = textDetector();
+      const found = td ? await td.detect(msg.bitmap) : [];
+      const { width: w, height: h } = msg.bitmap;
+      post({
+        type: 'text',
+        id: msg.id,
+        blocks: found
+          .filter((f) => f.rawValue?.trim())
+          .map((f) => ({ text: f.rawValue.trim(), bbox: { x: f.boundingBox.x / w, y: f.boundingBox.y / h, w: f.boundingBox.width / w, h: f.boundingBox.height / h } })),
+      });
+    } catch (err) {
+      post({ type: 'error', id: msg.id, message: (err as Error).message });
+    } finally {
+      msg.bitmap.close();
+    }
     return;
   }
   // frame

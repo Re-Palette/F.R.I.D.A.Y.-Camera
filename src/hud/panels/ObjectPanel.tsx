@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { relativeJa } from '../../core/util';
+import { headline, shownConfidence } from '../../services/vision/perception';
 import { frameSize } from '../../camera/frame';
 import { primaryDetection, useFriday } from '../../store/useFriday';
 import { useCountUpDom, useOrch, usePresence, useSticky } from '../hooks';
@@ -39,7 +40,15 @@ export function ObjectPanel({ show, compact = false, ticker = false }: { show: b
   const focus = useFriday((s) => s.focus);
   // Subscribe to primitives only — a new detection object every AI tick must not re-render the card.
   const hasDet = useFriday((s) => !!primaryDetection(s));
-  const confTarget = useFriday((s) => Math.round((primaryDetection(s)?.confidence ?? 0) * 100));
+  const confTarget = useFriday((s) => {
+    const d = primaryDetection(s);
+    return d ? Math.round(shownConfidence(d) * 100) : 0;
+  });
+  const head = useFriday((s) => {
+    const d = primaryDetection(s);
+    return d ? headline(d) : 'OBJECT IDENTIFICATION';
+  });
+  const generic = useFriday((s) => primaryDetection(s)?.displayName ?? '');
   const locked = useFriday((s) => s.lockState === 'locked');
   const news = useFriday((s) => s.news[0]);
   const sticky = useSticky(focus);
@@ -64,7 +73,7 @@ export function ObjectPanel({ show, compact = false, ticker = false }: { show: b
       </div>
       <div style={{ minWidth: 0 }}>
         <div className="label">
-          OBJECT IDENTIFICATION {locked && <Icon.Lock size={11} />}
+          <span className={`obj-head st-${sticky.identity?.status ?? 'detected'}`}>{head}</span> {locked && <Icon.Lock size={11} />}
           {compact && (
             <button
               className="obj-quick"
@@ -79,7 +88,16 @@ export function ObjectPanel({ show, compact = false, ticker = false }: { show: b
           )}
         </div>
         <div className="obj-name">{sticky.name}</div>
-        <div className="obj-sub">{sticky.subtitle}</div>
+        {sticky.identity && (sticky.identity.status === 'identified' || sticky.identity.status === 'possible') && generic && generic !== sticky.name ? (
+          <div className="tier-line">
+            {generic} → <b>{sticky.identity.detail ?? sticky.subtitle}</b>
+          </div>
+        ) : (
+          <div className="obj-sub">{sticky.subtitle}</div>
+        )}
+        {sticky.identity?.status === 'possible' && sticky.identity.candidates && (
+          <div className="cands">候補: {sticky.identity.candidates.map((c) => `${c.name} ${Math.round(c.confidence * 100)}%`).join(' / ')}</div>
+        )}
         <div className="conf">
           <span className="pct glow-o">
             <span ref={pctRef}>{confTarget}</span>
@@ -121,6 +139,11 @@ export function ObjectPanel({ show, compact = false, ticker = false }: { show: b
           <button className="chip" onClick={() => void orch.ask(`${sticky.place!.name}までナビして`)}>
             <Icon.Nav size={12} /> ナビ
           </button>
+        )}
+        {sticky.officialUrl && (
+          <a className="chip" href={sticky.officialUrl} target="_blank" rel="noopener noreferrer">
+            <Icon.External size={12} /> 公式サイト
+          </a>
         )}
       </div>
     </section>

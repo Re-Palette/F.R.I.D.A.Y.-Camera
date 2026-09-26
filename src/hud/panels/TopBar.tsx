@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { perf } from '../../perf/metrics';
 import { fmtTime } from '../../core/util';
 import { promptInstall, usePwa } from '../../pwa';
-import { deriveAIState, useAIState, useFriday } from '../../store/useFriday';
+import { deriveAIState, primaryDetection, useAIState, useFriday } from '../../store/useFriday';
 import { useNow, useOrch } from '../hooks';
 import { Icon } from '../icons';
 
@@ -11,6 +11,7 @@ const STATE_LABEL: Record<string, string> = {
   IDLE: 'STANDBY',
   SCANNING: 'SCANNING',
   ANALYZING: 'ANALYZING',
+  IDENTIFYING: 'IDENTIFYING',
   IDENTIFIED: 'IDENTIFIED',
   TARGET_LOCKED: 'TARGET LOCKED',
   LISTENING: 'LISTENING',
@@ -26,6 +27,7 @@ export function AIStatus({ compact = false }: { compact?: boolean }) {
     const st = deriveAIState(s);
     if (st === 'SEARCHING') return s.search?.detail ?? s.search?.stage.toUpperCase();
     if (st === 'IDENTIFIED' || st === 'TARGET_LOCKED') return s.focus?.name;
+    if (st === 'IDENTIFYING') return primaryDetection(s)?.displayName;
     if (st === 'LISTENING') return s.partial || undefined;
     if (st === 'SCANNING') return `${s.detections.length} OBJECTS`;
     return undefined;

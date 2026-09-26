@@ -26,6 +26,30 @@ function topicOf(q: string): Topic {
 /** Topic-aware demo answers for the demo entities; generic otherwise. */
 function mockAnswer(query: string, ctx: WorldContext): Omit<SearchAnswer, 'generatedAt'> {
   const focus = ctx.focus;
+  if (ctx.focusImage || focus?.identity?.status === 'unknown') {
+    return {
+      query,
+      summary: '画像検索の結果、似た形状の物体として「屋外用の小型機器（センサーボックス等）」が候補に挙がりました。確度は低く、断定はできません。（モックデータ: 実際の画像検索 API を接続すると置き換わります）',
+      keyPoints: ['候補: 屋外センサーボックス（低確度）', '候補: 配電用の小型筐体（低確度）', '近づいて撮影すると精度が上がります'],
+      sources: [
+        src({ title: '類似画像の検索結果', url: 'https://example.com/image-search', publisher: 'Image Search', tier: 'reference', snippet: '形状が類似する画像 8件', publishedAt: daysAgo(1), trust: 0.6 }),
+        src({ title: '屋外設備の種類', url: 'https://example.com/equipment', publisher: 'Open Encyclopedia', tier: 'reference', snippet: '屋外設備の一般的な外観', publishedAt: daysAgo(90) }),
+      ],
+      followUps: ['もっと近くで撮って調べて'],
+    };
+  }
+  if (focus && !focus.product && /値段|価格|いくら|最安/.test(query)) {
+    return {
+      query,
+      summary: `${focus.name}の価格を検索しました。販売店により価格が異なるため、公式ストアと主要ストアの価格を比較してください。（モックデータ: 実際の検索 API を接続すると最新価格に置き換わります）`,
+      keyPoints: ['公式ストアの価格を優先', '主要ストア 3件を比較', '価格は日々変動します'],
+      sources: [
+        src({ title: `${focus.name} 公式ストア`, url: focus.officialUrl ?? 'https://example.com/official', publisher: '公式', tier: 'official', snippet: '公式販売価格', publishedAt: daysAgo(3) }),
+        src({ title: '価格比較', url: 'https://example.com/compare', publisher: 'Price Compare', tier: 'reference', snippet: '主要ストアの価格', publishedAt: daysAgo(1) }),
+      ],
+      followUps: ['公式サイトを開いて', 'レビューは？'],
+    };
+  }
   const topic = topicOf(query);
   const name = focus?.name ?? query;
   const e = focus ? MOCK_ENTITIES[focus.id] : undefined;
@@ -52,8 +76,8 @@ function mockAnswer(query: string, ctx: WorldContext): Omit<SearchAnswer, 'gener
     };
   }
 
-  if (slug === 'rainbow-bridge' || slug === 'tokyo-tower') {
-    const official = src({ title: `${name} 公式情報`, url: `https://example.com/${slug}`, publisher: `${name} 公式`, tier: 'official', snippet: '営業時間・ライトアップ・アクセス', publishedAt: daysAgo(6) });
+  if (slug === 'rainbow-bridge' || slug === 'tokyo-tower' || slug === 'big-sight') {
+    const official = src({ title: `${name} 公式情報`, url: focus?.officialUrl ?? `https://example.com/${slug}`, publisher: `${name} 公式`, tier: 'official', snippet: '営業時間・ライトアップ・アクセス', publishedAt: daysAgo(6) });
     const gov = src({ title: '港区 観光ガイド', url: 'https://example.com/minato-guide', publisher: 'Minato City Guide', tier: 'government', snippet: '周辺観光・イベント情報', publishedAt: daysAgo(15) });
     const news = src({ title: e?.news[0]?.title ?? `${name} 関連ニュース`, url: e?.news[0]?.url ?? 'https://example.com/news', publisher: e?.news[0]?.source ?? 'Metro News', tier: 'news', snippet: '最新の関連報道', publishedAt: daysAgo(1) });
     const ref = src({ title: `${name} - 百科事典`, url: 'https://example.com/encyclopedia', publisher: 'Open Encyclopedia', tier: 'reference', snippet: '構造・歴史の概要', publishedAt: daysAgo(200) });
@@ -66,13 +90,13 @@ function mockAnswer(query: string, ctx: WorldContext): Omit<SearchAnswer, 'gener
       },
       history: {
         summary: focus?.facts.find((f) => f.key === 'opened')
-          ? `${name}は${focus.facts.find((f) => f.key === 'opened')!.value}に${slug === 'tokyo-tower' ? '完成' : '開通'}しました。${focus.summary}`
+          ? `${name}は${focus.facts.find((f) => f.key === 'opened')!.value}に${slug === 'tokyo-tower' ? '完成' : slug === 'big-sight' ? '開業' : '開通'}しました。${focus.summary}`
           : focus?.summary ?? '',
         keyPoints: focus?.facts.map((f) => `${f.label}: ${f.value}`) ?? [],
         followUps: ['夜に行くなら？', '名前の由来は？'],
       },
       access: {
-        summary: `${name}の最寄りはゆりかもめ「お台場海浜公園駅」。徒歩約15分で遊歩道の入口（芝浦側）へ行けます。`,
+        summary: slug === 'big-sight' ? `${name}の最寄りは、りんかい線「国際展示場駅」とゆりかもめ「東京ビッグサイト駅」です。` : `${name}の最寄りはゆりかもめ「お台場海浜公園駅」。徒歩約15分で遊歩道の入口（芝浦側）へ行けます。`,
         keyPoints: ['最寄り: お台場海浜公園駅', '徒歩: 約15分', '遊歩道は芝浦側・台場側の2か所'],
         followUps: ['駅までナビして'],
       },
@@ -89,7 +113,8 @@ function mockAnswer(query: string, ctx: WorldContext): Omit<SearchAnswer, 'gener
         followUps: ['いつできた？', '夜に行くなら？', '行き方は？'],
       },
     };
-    return { query, ...bank[topic], sources: [official, gov, news, ref, blog] };
+    const t = slug === 'big-sight' && (topic === 'night' || topic === 'hours' || topic === 'price') ? 'general' : topic;
+    return { query, ...bank[t], sources: [official, gov, news, ref, blog] };
   }
 
   return {
@@ -142,7 +167,10 @@ export class RemoteSearchService implements SearchService {
       '/search',
       {
         query,
-        focus: ctx.focus ? { id: ctx.focus.id, name: ctx.focus.name, keywords: ctx.focus.keywords } : null,
+        focus: ctx.focus ? { id: ctx.focus.id, name: ctx.focus.name, keywords: ctx.focus.keywords, identity: ctx.focus.identity } : null,
+        // Image search for things the vision tier couldn't identify.
+        image: ctx.focusImage,
+        location: ctx.location?.name,
         scene: ctx.scene?.summary,
         geo: ctx.geo,
         locale: 'ja-JP',

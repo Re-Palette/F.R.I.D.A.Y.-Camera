@@ -13,6 +13,7 @@ import type {
   GeoFix,
   Hazard,
   HudDensity,
+  LocationEstimate,
   MemoryHit,
   MemoryItem,
   NavTarget,
@@ -87,6 +88,10 @@ export interface FridayState {
   news: NewsItem[];
   scene: SceneAnalysis | null;
   analyzingUntil: number;
+  /** Fused "where are we" (GPS + landmarks + signs). */
+  location: LocationEstimate | null;
+  /** Multi-object summary, e.g. PERSON ×4 · CAR ×3. */
+  objectCounts: { key: string; label: string; n: number }[];
   hazards: Hazard[];
   ocr: OcrResult | null;
   translations: Translation[];
@@ -187,6 +192,8 @@ export const useFriday = create<FridayState>(() => ({
   news: [],
   scene: null,
   analyzingUntil: 0,
+  location: null,
+  objectCounts: [],
   hazards: [],
   ocr: null,
   translations: [],
@@ -226,6 +233,8 @@ export function deriveAIState(s: FridayState, now = Date.now()): AIState {
   if (s.speaking) return 'SPEAKING';
   if (s.busy === 'searching') return 'SEARCHING';
   if (s.busy === 'thinking') return 'THINKING';
+  const target = primaryDetection(s);
+  if (target?.identity?.status === 'identifying') return 'IDENTIFYING';
   if (s.listening && s.partial) return 'LISTENING';
   if (s.lockState === 'locked') return 'TARGET_LOCKED';
   if (s.analyzingUntil > now) return 'ANALYZING';

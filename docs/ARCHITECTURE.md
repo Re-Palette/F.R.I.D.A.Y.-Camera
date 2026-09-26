@@ -87,13 +87,61 @@ display **60.0 fps, p95 16.8 ms** while on-device inference ran at 944 ms (GPU e
 are unaffected by AI cost; with the CPU delegate inference dropped to ~100 ms (6.7 AI fps).
 Real phones with a GPU delegate are expected to be faster; verify on-device with `?perf=1`.
 
+## 1.6 Real-time recognition & scene understanding
+
+```
+Camera ─▶ Tier 1: DETECT + TRACK (on-device, 5–15 fps, every sampled frame)
+            MediaPipe EfficientDet-Lite0 in the vision worker → { id, label, confidence, bbox }
+       ─▶ AUGMENT (metadata only)
+            + cloud scene regions (buildings / signs the detector can't see)
+            + OCR text (signs, labels)  · + GPS/compass building estimates (source "geo", always 推定)
+       ─▶ Tier 2: IDENTIFY (once per stable track, async, budgeted)
+            GPU crop ≤512px of *that target only* → VisionProvider.identify → cached by tracking id
+       ─▶ SCENE (every ~9 s) + LOCATION fusion (1 Hz, local) + OBJECT COUNTS
+       ─▶ HUD (60 fps TrackRenderer) · Voice / Search use the same focus + identity
+```
+
+### VisionProvider (`src/services/contracts.ts`)
+
+| Provider | detect | identify | scene | text | Where |
+|---|---|---|---|---|---|
+| `MockVisionProvider` | scripted demo objects | scripted, with realistic latency, incl. POSSIBLE / UNKNOWN | scripted | scripted | `vision/MockVisionService.ts` |
+| `LocalVisionProvider` (`vision=ondevice`) | MediaPipe (worker) | class-level only (animals named, dishes "possible", products/vehicles stay generic) | luminance / counts / GPS heuristics | `TextDetector` in the worker when the platform has it | `vision/WorkerVisionService.ts` |
+| `CloudVisionProvider` (`vision=real`) | **still on-device** (latency, cost, privacy) | gateway `/vision/identify` on crops | gateway `/vision/scene` (+ `regions`) | gateway `/vision/ocr` (JP/EN/ZH/KO) | `vision/WorkerVisionService.ts` |
+
+Record shape (`Detection`, `src/core/types.ts`): `id`(=trackingId) · `category`(=type) · `label` · `confidence` · `bbox` · `timestamp` · `attributes` · `source` (`mock|local|cloud|geo|ocr`) · `text` · `identity` (`Identification`: status, kind, name, confidence, candidates, officialUrl, attributes).
+
+### Honesty rules (`services/vision/perception.ts`, unit-tested)
+- **≥ 80 % IDENTIFIED · 50–80 % POSSIBLE MATCH · < 50 % UNKNOWN OBJECT** — recomputed on the client from the confidence even if a server says otherwise.
+- Voice mirrors it: 「〜と推定されます」/「〜の可能性があります（62%）」/「特定できませんでした」.
+- Location is **推定** unless an image-based landmark agrees with GPS (`estimateLocation`). GPS/compass building projections are never more than POSSIBLE.
+- **People**: `PERSON DETECTED` only. `sanitize()` strips any name / attributes; people are never sent for identification; no face recognition, no age / gender / emotion.
+
+### Real-time budget
+- Tier 2 never runs per frame: stable ≥ 500 ms, priority locked › primary › salience, `maxInflightIdentify` (cloud: 2), cached per track, carried across tracker id changes (`reassociate`), UNKNOWN retried after 12 s or when the user locks the target.
+- Crops are made with `createImageBitmap(frame, sx, sy, sw, sh, resize)` (GPU) only when an identification starts.
+- The HUD re-renders only when a track's *recognition state* changes; positions and the live % are written by the TrackRenderer. Only the top-N salient objects get labels (portrait 3 / wide 5); the rest are quiet corner markers.
+- Measured (sandbox, see §1.5): CITY demo with 10 objects + identification — display **60.0 fps, p95 16.8 ms**; fake camera + on-device worker — 60.0 fps, camera latency 23.8 ms, AI 6.7 fps.
+
+### Cloud gateway — model & contract
+Recommended model behind the gateway: **Claude (`claude-opus-5`)** with image input, `output_config.format` JSON schema for the `Identification` shape, **low effort** for latency on `/vision/identify`, and the server-side refusal `fallbacks` enabled. Keep API keys on the gateway.
+
+| Endpoint | Request | Response |
+|---|---|---|
+| `POST /vision/identify` | `{ image: jpeg dataURL (crop ≤512px), label, category, bbox, text?, geo, heading, nearby:[{id,name,kind}], scene }` | `Identification` (`status` is recomputed client-side) |
+| `POST /vision/scene` | `{ image (≤768px), detections, geo, heading, now }` | `SceneAnalysis` + optional `regions: Detection[]` (buildings / signs with bbox) |
+| `POST /vision/ocr` | `{ image (≤1280px) }` | `OcrResult` (blocks with bbox + lang) |
+| `POST /search` | `{ query, focus{…, identity}, image?, location?, … }` | NDJSON stages + `SearchAnswer` (image search for UNKNOWN objects) |
+
+Gateway system prompt must require: answer only what is visible; return `unknown` with low confidence rather than guess; for people return only `kind: "person"` with no name or attributes.
+
 ## 2. Mock / Real
 
 解決順（上ほど優先）: SYSTEM シートでの上書き（localStorage） → `VITE_SERVICE_<NAME>` → `VITE_FRIDAY_MODE` → 既定値（voice だけ real、他は mock）。
 
 | Service | mock | real |
 |---|---|---|
-| vision | デモ映像と同期したシナリオ | `ondevice`: MediaPipe EfficientDet-Lite0（Web Worker・端末内、WASM は `/mediapipe/` から自前配信、モデル URL は `VITE_VISION_MODEL_URL` で変更可） / `real`: ゲートウェイ（エンコードと送信も Worker 内） |
+| vision | デモ映像と同期したシナリオ（識別の遅延・POSSIBLE / UNKNOWN も再現） | `ondevice`: MediaPipe EfficientDet-Lite0（Web Worker・端末内、WASM は `/mediapipe/` から自前配信、モデル URL は `VITE_VISION_MODEL_URL` で変更可） / `real`: ゲートウェイ（エンコードと送信も Worker 内） |
 | llm (+knowledge, social) | テンプレートによる言語化 | ゲートウェイ（例: Claude） |
 | search | 段階表示付きのパイプラインを模擬 | ゲートウェイ（NDJSON ストリーム） |
 | weather | 固定値 | **Open-Meteo（キー不要）** |

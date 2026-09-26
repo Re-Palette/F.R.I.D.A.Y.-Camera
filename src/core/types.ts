@@ -12,6 +12,7 @@ export type AIState =
   | 'IDLE'
   | 'SCANNING'
   | 'ANALYZING'
+  | 'IDENTIFYING'
   | 'IDENTIFIED'
   | 'TARGET_LOCKED'
   | 'LISTENING'
@@ -57,20 +58,88 @@ export type ObjectCategory =
   | 'boat'
   | 'other';
 
+/** Where a perception result came from. */
+export type PerceptionSource = 'mock' | 'local' | 'cloud' | 'geo' | 'ocr';
+
+/**
+ * Recognition progress for one tracked object:
+ *   detected → identifying → identified | possible | unknown
+ * (`person` never goes past `detected`: no identity, no attributes.)
+ */
+export type IdentityStatus = 'detected' | 'identifying' | 'identified' | 'possible' | 'unknown';
+
+export type IdentityKind =
+  | 'landmark'
+  | 'building'
+  | 'product'
+  | 'vehicle'
+  | 'food'
+  | 'plant'
+  | 'animal'
+  | 'person'
+  | 'text'
+  | 'place'
+  | 'generic';
+
+/** Fine-grained identification of a detection (tier 2, e.g. 車 → Tesla Model 3). */
+export interface Identification {
+  status: IdentityStatus;
+  kind: IdentityKind;
+  /** Specific name ("東京ビッグサイト", "Tesla Model 3"). Empty when unknown. */
+  name: string;
+  nameEn?: string;
+  /** One-line description (用途 / カテゴリー / 推定材料…). */
+  detail?: string;
+  confidence: number;
+  /** Knowledge-graph / catalogue reference for profile lookup. */
+  entityId?: string;
+  officialUrl?: string;
+  /** Safe, factual attributes only (型番, ブランド, 学名…). Never personal attributes. */
+  attributes?: Record<string, string>;
+  /** Alternatives when not certain. */
+  candidates?: { name: string; confidence: number }[];
+  source: PerceptionSource;
+  at: number;
+}
+
+/**
+ * One perceived object. Field mapping to the perception record spec:
+ *   id = trackingId · category = type · label · confidence · bbox = boundingBox
+ *   timestamp · attributes · source · identity (tier-2 identification)
+ */
 export interface Detection {
-  /** Stable track id — identical across frames for the same physical object. */
+  /** Stable tracking id — identical across frames for the same physical object. */
   id: string;
-  /** Raw model label, e.g. "car", "bridge". */
+  /** Raw (tier-1) model label, e.g. "car", "cell phone". */
   label: string;
-  /** Human-facing name, e.g. "レインボーブリッジ". */
+  /** Human-facing tier-1 name, e.g. "乗用車". */
   displayName: string;
-  /** Secondary line, e.g. "橋 / 建造物". */
+  /** Secondary line, e.g. "車両". */
   subtitle?: string;
+  /** Object type. */
   category: ObjectCategory;
   confidence: number;
   bbox: BBox;
   /** Knowledge-graph reference used by the knowledge / places / product services. */
   entityId?: string;
+  /** Capture time (performance.now() timebase) of the frame this came from. */
+  timestamp?: number;
+  source?: PerceptionSource;
+  attributes?: Record<string, string>;
+  /** Text read on this object (signs, labels) by OCR. */
+  text?: string;
+  identity?: Identification;
+}
+
+/** Where we think the camera is, and how sure we are. */
+export interface LocationEstimate {
+  name: string;
+  area?: string;
+  confidence: number;
+  /** Evidence used: GPS fix, recognised landmark, sign text, image. */
+  basis: ('gps' | 'landmark' | 'sign' | 'image')[];
+  /** true → show as 推定 (not confirmed). */
+  estimated: boolean;
 }
 
 export type TimeOfDay = 'dawn' | 'morning' | 'day' | 'dusk' | 'night';
@@ -84,6 +153,8 @@ export interface SceneAnalysis {
   crowd?: 'low' | 'moderate' | 'high';
   environment?: string;
   confidence: number;
+  /** Regions the scene model found that the fast detector can't (buildings, signs, text). */
+  regions?: Detection[];
 }
 
 export interface OcrBlock {
@@ -152,6 +223,9 @@ export interface EntityProfile {
   place?: PlaceInfo;
   product?: ProductInfo;
   keywords: string[];
+  officialUrl?: string;
+  /** How this entity was recognised (status, confidence) — drives uncertainty wording. */
+  identity?: Identification;
 }
 
 // ─── Search ─────────────────────────────────────────────────────────────────
@@ -331,6 +405,7 @@ export type IntentKind =
   | 'switch_camera'
   | 'zoom'
   | 'social'
+  | 'open_url'
   | 'chat';
 
 export interface Intent {
@@ -351,7 +426,8 @@ export type ChatAttachment =
   | { kind: 'memory'; hits: MemoryHit[] }
   | { kind: 'nav'; target: NavTarget }
   | { kind: 'translation'; items: Translation[] }
-  | { kind: 'social'; draft: SocialDraft };
+  | { kind: 'social'; draft: SocialDraft }
+  | { kind: 'link'; url: string; label: string };
 
 export interface ChatMessage {
   id: string;

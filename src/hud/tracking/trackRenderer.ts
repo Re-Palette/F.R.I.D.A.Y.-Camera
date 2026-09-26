@@ -20,6 +20,7 @@ import type { BBox, Detection } from '../../core/types';
 import { onFrame } from '../../perf/frameLoop';
 import { getState } from '../../store/useFriday';
 import { boxToScreen } from '../geometry';
+import { shownConfidence } from '../../services/vision/perception';
 
 /** Approximate phone main-camera field of view (deg) along the frame's long / short side. */
 const FOV_LONG = 68;
@@ -36,7 +37,7 @@ interface Track {
   disp: BBox | null; // smoothed screen box (px)
   el: HTMLElement | null;
   kind: 'box' | 'rect';
-  parts: { tr?: HTMLElement; bl?: HTMLElement; br?: HTMLElement; center?: HTMLElement; ring?: HTMLElement; label?: HTMLElement };
+  parts: { tr?: HTMLElement; bl?: HTMLElement; br?: HTMLElement; center?: HTMLElement; ring?: HTMLElement; label?: HTMLElement; pct?: HTMLElement };
   labelText: string;
   applied: { x: number; y: number; w: number; h: number };
 }
@@ -82,11 +83,13 @@ export const trackRenderer = {
   /** Feed a fresh AI result. `capturedAt` is the sensor time of the analysed frame. */
   observe(dets: Detection[], capturedAt: number) {
     for (const d of dets) {
-      upsert(d.id, d.bbox, capturedAt, 'box');
+      // Results from slower paths (cloud regions, OCR) keep their own capture time.
+      upsert(d.id, d.bbox, d.timestamp && d.timestamp < capturedAt ? d.timestamp : capturedAt, 'box');
       const tr = tracks.get(d.id)!;
-      const text = `${d.displayName}  ${Math.round(d.confidence * 100)}%`;
-      if (tr.parts.label && text !== tr.labelText) {
-        tr.parts.label.textContent = text;
+      // Only the live % changes at AI rate; the headline/name re-render via React on state change.
+      const text = `${Math.round(shownConfidence(d) * 100)}%`;
+      if (tr.parts.pct && text !== tr.labelText) {
+        tr.parts.pct.textContent = text;
         tr.labelText = text;
       }
     }
@@ -114,12 +117,17 @@ export const trackRenderer = {
         cur.parts = {};
       }
     };
-    if (tr.el === el && tr.parts.ring === ((el.querySelector('[data-p="ring"]') as HTMLElement | null) ?? undefined) && tr.parts.label === ((el.querySelector('[data-p="label"]') as HTMLElement | null) ?? undefined)) return detach;
+    const same = (k: 'ring' | 'label' | 'pct') => tr!.parts[k] === ((el.querySelector(`[data-p="${k}"]`) as HTMLElement | null) ?? undefined);
+    if (tr.el === el && same('ring') && same('label') && same('pct')) {
+      // Same nodes, but classes may have changed (e.g. became primary): re-apply next frame.
+      tr.applied = { x: Infinity, y: Infinity, w: Infinity, h: Infinity };
+      return detach;
+    }
     tr.el = el;
     tr.kind = el.dataset.kind === 'rect' ? 'rect' : 'box';
     const q = (r: string) => (el.querySelector(`[data-p="${r}"]`) as HTMLElement | null) ?? undefined;
-    tr.parts = { tr: q('tr'), bl: q('bl'), br: q('br'), center: q('center'), ring: q('ring'), label: q('label') };
-    tr.labelText = tr.parts.label?.textContent ?? '';
+    tr.parts = { tr: q('tr'), bl: q('bl'), br: q('br'), center: q('center'), ring: q('ring'), label: q('label'), pct: q('pct') };
+    tr.labelText = tr.parts.pct?.textContent ?? '';
     tr.applied = { x: Infinity, y: Infinity, w: Infinity, h: Infinity };
     // Keep the smoothed position when React re-mounts the node for the same track.
     return detach;
@@ -186,6 +194,10 @@ function apply(tr: Track) {
       if (parts.bl) parts.bl.style.transform = `translate3d(0, ${d.h.toFixed(1)}px, 0)`;
       if (parts.br) parts.br.style.transform = `translate3d(${d.w.toFixed(1)}px, ${d.h.toFixed(1)}px, 0)`;
       if (parts.center) parts.center.style.transform = `translate3d(${(d.w / 2).toFixed(1)}px, ${(d.h / 2).toFixed(1)}px, 0)`;
+      if (parts.label) {
+        // The primary target's label sits under its box (top edges are often under HUD panels).
+        parts.label.style.transform = tr.el!.classList.contains('primary') ? `translate3d(0, ${(d.h + 6).toFixed(1)}px, 0)` : '';
+      }
       if (parts.ring) {
         const r = Math.max(24, Math.max(d.w, d.h) * 0.62);
         parts.ring.style.transform = `translate3d(${(d.w / 2).toFixed(1)}px, ${(d.h / 2).toFixed(1)}px, 0) scale(${(r / 100).toFixed(3)})`;

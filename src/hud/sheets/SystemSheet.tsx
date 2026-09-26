@@ -10,6 +10,7 @@ import { Sheet } from './Sheet';
 
 const SCENES: [DemoScene, string][] = [
   ['odaiba', 'ODAIBA'],
+  ['city', 'CITY'],
   ['desk', 'PRODUCT'],
   ['menu', 'MENU'],
   ['street', 'STREET'],
@@ -117,7 +118,7 @@ export function SystemSheet() {
       {feed === 'demo' && (
         <div className="sys-row">
           <span className="n">DEMO SCENE</span>
-          <span className="d">ランドマーク / 商品 / 翻訳 / 危険検知</span>
+          <span className="d">ランドマーク / 都市（識別デモ） / 商品 / 翻訳 / 危険検知</span>
           <span className="seg">
             {SCENES.map(([k, l]) => (
               <button key={k} className={scene === k ? 'on' : ''} onClick={() => orch.setDemoScene(k)}>
@@ -136,7 +137,7 @@ export function SystemSheet() {
           <span className="seg">
             {SERVICE_MODES[n].map((m) => (
               <button key={m} className={modes[n] === m ? 'on' : ''} onClick={() => void orch.setServiceMode(n, m)}>
-                {m === 'ondevice' ? 'DEVICE' : m.toUpperCase()}
+                {n === 'vision' ? { mock: 'MOCK', ondevice: 'LOCAL', real: 'CLOUD' }[m] : m === 'ondevice' ? 'DEVICE' : m.toUpperCase()}
               </button>
             ))}
           </span>

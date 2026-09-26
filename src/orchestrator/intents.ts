@@ -17,7 +17,7 @@ const strip = (s: string) =>
 /** Words that point at "the thing I'm looking at" / previous topic. */
 const DEICTIC = /(これ|それ|あれ|この|その|あの|ここ|そこ|あそこ|こいつ|this|that|it\b)/i;
 /** Questions that only make sense about the current focus (follow-ups). */
-const FOLLOW_UP = /^(いつ|何年|どのくらい|どれくらい|高さ|長さ|値段|価格|いくら|評価|営業|何時|誰が|なぜ|どうして|夜に|昼に|名前の由来)/;
+const FOLLOW_UP = /^(いつ|何年|どのくらい|どれくらい|高さ|長さ|値段|価格|いくら|評価|営業|何時|誰が|なぜ|どうして|夜に|昼に|名前の由来|何の|なんの|用途|どこの|メーカー|学名)/;
 
 const RULES: Rule[] = [
   { kind: 'record_stop', re: /(録画|撮影|動画).*(止め|停止|終わ|ストップ)|stop recording/i },
@@ -30,6 +30,7 @@ const RULES: Rule[] = [
       return m ? { timer: m[1] } : {};
     },
   },
+  { kind: 'open_url', re: /(公式)?(サイト|ホームページ|HP|ウェブページ|webサイト).*(開いて|開く|見せて|表示)|open (the )?(official )?(site|website|page)/i },
   { kind: 'switch_camera', re: /(カメラ|インカメ|自撮り).*(切り替|切替|反転|変え)|selfie|flip camera/i },
   {
     kind: 'zoom',
