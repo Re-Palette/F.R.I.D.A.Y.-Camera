@@ -81,13 +81,59 @@ export type IdentityKind =
   | 'place'
   | 'generic';
 
+/** Where a piece of identification evidence came from — never mixed up in the UI. */
+export type EvidenceSource = 'visual' | 'ocr' | 'web' | 'context';
+
+/** One observed characteristic of the target (LEVEL 2 — 外観特徴分析). */
+export interface VisualFeature {
+  key: 'brand' | 'category' | 'shape' | 'color' | 'material' | 'logo' | 'layout' | 'display' | 'design' | 'text' | 'model-hint' | 'package' | 'other';
+  label: string;
+  value: string;
+  source: EvidenceSource;
+  confidence?: number;
+}
+
+/**
+ * A specific identity hypothesis (LEVEL 3). Hierarchical so the HUD can
+ * back off to the most specific level we're actually sure about:
+ *   brand → family → model → variant   (Apple → MacBook Air → 13-inch → M3?)
+ */
+export interface IdentityCandidate {
+  name: string;
+  brand?: string;
+  family?: string;
+  model?: string;
+  /** Generation / year / trim when inferable ("2024 refresh / Highland"). */
+  variant?: string;
+  confidence: number;
+  /** Why this candidate (e.g. "OCR: WH-1000XM6", "カメラ配置が一致"). */
+  evidence?: string[];
+  entityId?: string;
+  officialUrl?: string;
+}
+
+/** Result of checking a candidate against official / trusted web sources. */
+export interface Verification {
+  status: 'verified' | 'partial' | 'unverified' | 'contradicted' | 'skipped';
+  /** What matched (e.g. "公式製品ページの外観と一致"). */
+  matched: string[];
+  sources: { title: string; url: string; publisher: string; tier: SourceTier }[];
+  /** Facts taken from those sources — model-level facts only, never guessed specs. */
+  facts: Fact[];
+  at: number;
+}
+
+export type IdentifyStage = 'analyzing' | 'reading' | 'matching' | 'verifying';
+
 /** Fine-grained identification of a detection (tier 2, e.g. 車 → Tesla Model 3). */
 export interface Identification {
   status: IdentityStatus;
   kind: IdentityKind;
-  /** Specific name ("東京ビッグサイト", "Tesla Model 3"). Empty when unknown. */
+  /** Graded display title — as specific as the confidence allows ("Apple MacBook Air"). Empty when unknown. */
   name: string;
   nameEn?: string;
+  /** Qualifier shown under the title ("モデル：M2 / M3系の可能性", "正確なモデルは判別できません"). */
+  note?: string;
   /** One-line description (用途 / カテゴリー / 推定材料…). */
   detail?: string;
   confidence: number;
@@ -96,8 +142,20 @@ export interface Identification {
   officialUrl?: string;
   /** Safe, factual attributes only (型番, ブランド, 学名…). Never personal attributes. */
   attributes?: Record<string, string>;
-  /** Alternatives when not certain. */
-  candidates?: { name: string; confidence: number }[];
+  /** All hypotheses compared, best first. */
+  candidates?: { name: string; confidence: number; evidence?: string[] }[];
+  /** Hierarchy of the best candidate. */
+  hierarchy?: { brand?: string; family?: string; model?: string; variant?: string; category?: string };
+  /** LEVEL 2 evidence, labelled by source (VISUAL ANALYSIS / OCR). */
+  features?: VisualFeature[];
+  /** Text read on the target by OCR. */
+  ocrText?: string[];
+  /** WEB VERIFIED — separate from visual inference. */
+  verification?: Verification;
+  /** Things that can't be known from the image (CPU / RAM / SSD …). */
+  unknown?: string[];
+  /** Pipeline progress while identifying. */
+  stage?: IdentifyStage;
   source: PerceptionSource;
   at: number;
 }

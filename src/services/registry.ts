@@ -1,5 +1,5 @@
 import type { ServiceMode, ServiceName } from '../core/config';
-import type { ServiceRegistry, VisionService } from './contracts';
+import type { SearchService, ServiceRegistry, VisionService } from './contracts';
 import { MockKnowledgeService, RemoteKnowledgeService } from './knowledge';
 import { MockLLMService, RemoteLLMService } from './llm';
 import { BrowserLocationService, MockLocationService } from './location';
@@ -14,8 +14,12 @@ import { OnDeviceVisionService, RemoteVisionService } from './vision/WorkerVisio
 import { MockVoiceService, WebVoiceService } from './voice';
 import { MockWeatherService, OpenMeteoWeatherService } from './weather';
 
-function vision(mode: ServiceMode): VisionService {
-  if (mode === 'ondevice') return new OnDeviceVisionService();
+/**
+ * VisionProvider factory. Web verification inside the identification
+ * pipeline goes through whichever SearchService is configured.
+ */
+export function createVision(mode: ServiceMode, deps: { search: () => SearchService }): VisionService {
+  if (mode === 'ondevice') return new OnDeviceVisionService(deps.search);
   if (mode === 'real') return new RemoteVisionService();
   return new MockVisionService();
 }
@@ -24,13 +28,14 @@ function vision(mode: ServiceMode): VisionService {
 export function createServices(modes: Record<ServiceName, ServiceMode>): ServiceRegistry {
   const real = (n: ServiceName) => modes[n] === 'real';
   const voice = real('voice') ? new WebVoiceService() : new MockVoiceService();
+  const search = real('search') ? new RemoteSearchService() : new MockSearchService();
   return {
-    vision: vision(modes.vision),
+    vision: createVision(modes.vision, { search: () => search }),
     // Knowledge follows the LLM mode — entity profiles come from the same gateway.
     knowledge: real('llm') ? new RemoteKnowledgeService() : new MockKnowledgeService(),
     places: real('places') ? new RemotePlacesService() : new MockPlacesService(),
     llm: real('llm') ? new RemoteLLMService() : new MockLLMService(),
-    search: real('search') ? new RemoteSearchService() : new MockSearchService(),
+    search,
     translate: real('translate') ? new RemoteTranslateService() : new MockTranslateService(),
     weather: real('weather') ? new OpenMeteoWeatherService() : new MockWeatherService(),
     news: real('news') ? new RemoteNewsService() : new MockNewsService(),

@@ -95,8 +95,10 @@ Camera ─▶ Tier 1: DETECT + TRACK (on-device, 5–15 fps, every sampled frame
        ─▶ AUGMENT (metadata only)
             + cloud scene regions (buildings / signs the detector can't see)
             + OCR text (signs, labels)  · + GPS/compass building estimates (source "geo", always 推定)
-       ─▶ Tier 2: IDENTIFY (once per stable track, async, budgeted)
-            GPU crop ≤512px of *that target only* → VisionProvider.identify → cached by tracking id
+       ─▶ Tier 2: IDENTIFY (once per stable track, async, budgeted — see §1.7)
+            GPU crop ≤512px of *that target only* → IdentificationPipeline
+            OCR → VISION ANALYSIS (features) → IDENTIFICATION (candidates) → CONFIDENCE CHECK
+            → WEB VERIFY (only when it can change the answer) → graded name → cached by tracking id
        ─▶ SCENE (every ~9 s) + LOCATION fusion (1 Hz, local) + OBJECT COUNTS
        ─▶ HUD (60 fps TrackRenderer) · Voice / Search use the same focus + identity
 ```
@@ -105,15 +107,15 @@ Camera ─▶ Tier 1: DETECT + TRACK (on-device, 5–15 fps, every sampled frame
 
 | Provider | detect | identify | scene | text | Where |
 |---|---|---|---|---|---|
-| `MockVisionProvider` | scripted demo objects | scripted, with realistic latency, incl. POSSIBLE / UNKNOWN | scripted | scripted | `vision/MockVisionService.ts` |
-| `LocalVisionProvider` (`vision=ondevice`) | MediaPipe (worker) | class-level only (animals named, dishes "possible", products/vehicles stay generic) | luminance / counts / GPS heuristics | `TextDetector` in the worker when the platform has it | `vision/WorkerVisionService.ts` |
-| `CloudVisionProvider` (`vision=real`) | **still on-device** (latency, cost, privacy) | gateway `/vision/identify` on crops | gateway `/vision/scene` (+ `regions`) | gateway `/vision/ocr` (JP/EN/ZH/KO) | `vision/WorkerVisionService.ts` |
+| `MockVisionProvider` | scripted demo objects | scripted pipeline (OCR / features / candidates / verification) with realistic stage latency, incl. POSSIBLE / UNKNOWN | scripted | scripted | `vision/MockVisionService.ts` |
+| `LocalVisionProvider` (`vision=ondevice`) | MediaPipe (worker) | on-device OCR of the crop + colour/shape features + brand/model patterns from label text (e.g. `SONY WH-1000XM5`, `Canon EOS R6`); web check through the search service | luminance / counts / GPS heuristics | `TextDetector` in the worker when the platform has it | `vision/WorkerVisionService.ts` |
+| `CloudVisionProvider` (`vision=real`) | **still on-device** (latency, cost, privacy) | gateway `/vision/ocr` + `/vision/analyze` + `/vision/verify` on crops | gateway `/vision/scene` (+ `regions`) | gateway `/vision/ocr` (JP/EN/ZH/KO) | `vision/WorkerVisionService.ts` |
 
 Record shape (`Detection`, `src/core/types.ts`): `id`(=trackingId) · `category`(=type) · `label` · `confidence` · `bbox` · `timestamp` · `attributes` · `source` (`mock|local|cloud|geo|ocr`) · `text` · `identity` (`Identification`: status, kind, name, confidence, candidates, officialUrl, attributes).
 
 ### Honesty rules (`services/vision/perception.ts`, unit-tested)
-- **≥ 80 % IDENTIFIED · 50–80 % POSSIBLE MATCH · < 50 % UNKNOWN OBJECT** — recomputed on the client from the confidence even if a server says otherwise.
-- Voice mirrors it: 「〜と推定されます」/「〜の可能性があります（62%）」/「特定できませんでした」.
+- **≥ 80 % IDENTIFIED · 40–80 % POSSIBLE MATCH · < 40 % UNKNOWN** — recomputed on the client (`gradeIdentity`) from the candidates even if a server says otherwise. The *name* is graded too (§1.7).
+- Voice mirrors it: 「〜と推定されます」/「〜の可能性があります（62%）。モデルは〜の可能性があります」/「特定できませんでした」, and says separately what the web check confirmed and what the image cannot show (「CPU / SoCは画像からは判別できません」).
 - Location is **推定** unless an image-based landmark agrees with GPS (`estimateLocation`). GPS/compass building projections are never more than POSSIBLE.
 - **People**: `PERSON DETECTED` only. `sanitize()` strips any name / attributes; people are never sent for identification; no face recognition, no age / gender / emotion.
 
@@ -124,16 +126,56 @@ Record shape (`Detection`, `src/core/types.ts`): `id`(=trackingId) · `category`
 - Measured (sandbox, see §1.5): CITY demo with 10 objects + identification — display **60.0 fps, p95 16.8 ms**; fake camera + on-device worker — 60.0 fps, camera latency 23.8 ms, AI 6.7 fps.
 
 ### Cloud gateway — model & contract
-Recommended model behind the gateway: **Claude (`claude-opus-5`)** with image input, `output_config.format` JSON schema for the `Identification` shape, **low effort** for latency on `/vision/identify`, and the server-side refusal `fallbacks` enabled. Keep API keys on the gateway.
+Recommended model behind the gateway: **Claude (`claude-opus-5`)** with image input, `output_config.format` JSON schema for the `{features, candidates}` shape, **low effort** for latency on `/vision/analyze`, and the server-side refusal `fallbacks` enabled. Keep API keys on the gateway.
 
 | Endpoint | Request | Response |
 |---|---|---|
-| `POST /vision/identify` | `{ image: jpeg dataURL (crop ≤512px), label, category, bbox, text?, geo, heading, nearby:[{id,name,kind}], scene }` | `Identification` (`status` is recomputed client-side) |
+| `POST /vision/analyze` | `{ image: jpeg dataURL (crop ≤512px), label, category, ocr: string[], geo, heading, nearby:[{id,name,kind}], scene }` | `{ features: VisualFeature[], candidates: IdentityCandidate[] }` (status and name are graded client-side) |
+| `POST /vision/verify` | `{ candidate: IdentityCandidate, features }` | `Verification` `{ status, matched, sources:[{title,url,publisher,tier}], facts }` — gateway runs web search + fetches official pages |
 | `POST /vision/scene` | `{ image (≤768px), detections, geo, heading, now }` | `SceneAnalysis` + optional `regions: Detection[]` (buildings / signs with bbox) |
 | `POST /vision/ocr` | `{ image (≤1280px) }` | `OcrResult` (blocks with bbox + lang) |
 | `POST /search` | `{ query, focus{…, identity}, image?, location?, … }` | NDJSON stages + `SearchAnswer` (image search for UNKNOWN objects) |
 
-Gateway system prompt must require: answer only what is visible; return `unknown` with low confidence rather than guess; for people return only `kind: "person"` with no name or attributes.
+Gateway system prompt must require: answer only what is visible; list several candidates with evidence instead of one guess; never infer specs the image can't show; return low confidence rather than guess; for people return only `kind: "person"` with no name or attributes; never read or return license plates. `/vision/verify` fits Claude with the `web_search` / `web_fetch` server tools, restricted to official domains where possible.
+
+## 1.7 Detailed identification (LEVEL 1 → 2 → 3)
+
+```
+CAMERA → DETECTION → TRACKING ─(stable ≥500ms, target changed, or LOCK)─▶
+  OCR (crop)                        OCRProvider                 "reading"   → HUD: OCR
+  VISION ANALYSIS (LEVEL 2)         ImageUnderstandingProvider  "analyzing" → VISION ANALYSIS
+      brand · colour · material · logo · button/camera/port layout · display shape · text · model hints · package
+  IDENTIFICATION (LEVEL 3)          IdentificationProvider      "matching"  → IDENTIFICATION
+      ranked candidates {name, brand, family, model, variant, confidence, evidence}
+      merged with brand/model patterns found in the OCR text (independent agreement boosts)
+  CONFIDENCE CHECK                  needsVerification(): only products / vehicles / buildings / food,
+                                    plausible (≥40 %) and not already certain (≥90 % with a clear gap)
+  WEB VERIFY (optional)             WebVerificationProvider     "verifying" → WEB VERIFY
+      official / corporate / government sources only; cached per candidate name; ±confidence
+  FINAL → gradeIdentity() → Identification { name, note, confidence, hierarchy, candidates,
+                                              features, ocrText, verification, unknown }
+```
+
+Code: `services/vision/identify/pipeline.ts` (orchestration, cache, finish), `identify/providers.ts` (Mock / Local / Search / Cloud implementations of the four provider interfaces in `contracts.ts`), `vision/perception.ts` (pure grading rules, unit-tested in `tests/identify.test.ts`). Any provider can be replaced independently (e.g. on-device OCR + cloud understanding + your own search).
+
+**Graded naming** (`gradeIdentity`) — never asserts what the evidence doesn't support:
+
+| confidence | shown | example |
+|---|---|---|
+| ≥ 80 % | full model | **Apple MacBook Air 13-inch** · 96 % (generation/trim only as 「〜の可能性」) |
+| 60–80 % | brand + family, model as a possibility | **Apple MacBook Air** · モデル：M2 / M3系の可能性 · 72 % |
+| 40–60 % | family-level class | **MacBook系ノートPC** · 正確なモデルは判別できません · 41 % |
+| < 40 % | unknown | 詳細モデルを特定できません |
+
+Two candidates closer than 10 points cap the confidence at 75 % (the pipeline compares them rather than picking one). Plants use 科 → 属 → 種, animals 種 → 品種, cars メーカー → 車種 → 世代 → グレード/年式.
+
+**Provenance** is kept apart end to end: `features` (AI inference from the image), `ocrText` (read), `verification` (web facts + sources), `unknown` (properties the image cannot reveal, e.g. CPU / memory / storage, grade / exact year). The INTEL sheet shows them as IDENTIFIED / CANDIDATES / VISUAL ANALYSIS / OCR / WEB VERIFIED / UNKNOWN; mock verification is labelled モック.
+
+**HUD**: the current target gets a thin `[ TARGET LOCK ]` card beside its box (transform-only, follows the track at 60 fps): name + note + confidence. Tap (or lock) expands Brand / Category / Model / Color and `[ VIEW DETAILS ]`. The big object panel is shown only in FULL density. While the pipeline runs, the card and the top bar show the stage (OCR / VISION ANALYSIS / IDENTIFICATION / WEB VERIFY).
+
+**Cost / latency**: nothing here runs per frame. One pipeline run per track (cached by tracking id, carried across id changes); re-run only when the box changes shape/size markedly (`targetChanged`) or the track goes stale; LOCK triggers a forced web check once. Verification results are cached per candidate name.
+
+**Privacy**: people are never sent to the pipeline. License plates are neither read, stored nor displayed (the car feature list states it explicitly; the gateway prompt must require it).
 
 ## 2. Mock / Real
 
@@ -161,6 +203,7 @@ Gateway system prompt must require: answer only what is visible; return `unknown
 | `POST /vision/detect` | `{ image: dataURL, geo, heading }` | `{ detections: { label, displayName, subtitle, category, confidence, bbox(0‥1), entityId? }[] }` |
 | `POST /vision/scene` | `{ image, detections, geo, heading, now }` | `SceneAnalysis` |
 | `POST /vision/ocr` | `{ image }` | `OcrResult` |
+| `POST /vision/analyze` · `/vision/verify` | see §1.6 | `{features, candidates}` · `Verification` |
 | `POST /knowledge/profile` | `{ detection, geo }` | `EntityProfile \| null` |
 | `POST /knowledge/related` | `{ id, name }` | `RelatedInfo[]` |
 | `POST /llm/respond` | `{ utterance, intent, history, context, grounding }` | NDJSON `{"type":"token","text":…}` |

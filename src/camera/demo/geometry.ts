@@ -39,6 +39,7 @@ export const DEMO_OBJECTS: Record<DemoScene, DemoObject[]> = {
     { key: 'smartphone', bbox: { x: 0.68, y: 0.71, w: 0.2, h: 0.14 }, acquireAt: 2.4 },
     { key: 'coffee', bbox: { x: 0.08, y: 0.68, w: 0.15, h: 0.12 }, acquireAt: 3.0 },
     { key: 'monstera', bbox: { x: 0.0, y: 0.17, w: 0.21, h: 0.39 }, acquireAt: 3.6 },
+    { key: 'cola', bbox: { x: 0.835, y: 0.455, w: 0.09, h: 0.24 }, acquireAt: 2.1 },
   ],
   menu: [{ key: 'menu', bbox: { x: 0.12, y: 0.22, w: 0.76, h: 0.56 }, acquireAt: 1.0 }],
   street: [

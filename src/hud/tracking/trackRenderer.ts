@@ -39,6 +39,8 @@ interface Track {
   kind: 'box' | 'rect';
   parts: { tr?: HTMLElement; bl?: HTMLElement; br?: HTMLElement; center?: HTMLElement; ring?: HTMLElement; label?: HTMLElement; pct?: HTMLElement };
   labelText: string;
+  /** Label width (px), measured lazily after each render; 0 = unknown. */
+  labelW: number;
   applied: { x: number; y: number; w: number; h: number };
 }
 
@@ -61,7 +63,7 @@ function upsert(id: string, box: BBox, t: number, kind: Track['kind']) {
   const world = { x: box.x - off.dx, y: box.y - off.dy, w: box.w, h: box.h };
   const tr = tracks.get(id);
   if (!tr) {
-    tracks.set(id, { id, world, t, vel: { x: 0, y: 0, w: 0, h: 0 }, disp: null, el: null, kind, parts: {}, labelText: '', applied: { x: Infinity, y: Infinity, w: Infinity, h: Infinity } });
+    tracks.set(id, { id, world, t, vel: { x: 0, y: 0, w: 0, h: 0 }, disp: null, el: null, kind, parts: {}, labelText: '', labelW: 0, applied: { x: Infinity, y: Infinity, w: Infinity, h: Infinity } });
     return;
   }
   const dt = t - tr.t;
@@ -107,7 +109,7 @@ export const trackRenderer = {
   attach(id: string, el: HTMLElement) {
     let tr = tracks.get(id);
     if (!tr) {
-      tr = { id, world: { x: 0.5, y: 0.5, w: 0, h: 0 }, t: performance.now(), vel: { x: 0, y: 0, w: 0, h: 0 }, disp: null, el: null, kind: el.dataset.kind === 'rect' ? 'rect' : 'box', parts: {}, labelText: '', applied: { x: Infinity, y: Infinity, w: Infinity, h: Infinity } };
+      tr = { id, world: { x: 0.5, y: 0.5, w: 0, h: 0 }, t: performance.now(), vel: { x: 0, y: 0, w: 0, h: 0 }, disp: null, el: null, kind: el.dataset.kind === 'rect' ? 'rect' : 'box', parts: {}, labelText: '', labelW: 0, applied: { x: Infinity, y: Infinity, w: Infinity, h: Infinity } };
       tracks.set(id, tr);
     }
     const detach = () => {
@@ -117,6 +119,7 @@ export const trackRenderer = {
         cur.parts = {};
       }
     };
+    tr.labelW = 0;
     const same = (k: 'ring' | 'label' | 'pct') => tr!.parts[k] === ((el.querySelector(`[data-p="${k}"]`) as HTMLElement | null) ?? undefined);
     if (tr.el === el && same('ring') && same('label') && same('pct')) {
       // Same nodes, but classes may have changed (e.g. became primary): re-apply next frame.
@@ -167,16 +170,16 @@ function frame(now: number, dt: number) {
       d.w += (target.w - d.w) * a;
       d.h += (target.h - d.h) * a;
     }
-    apply(tr);
+    apply(tr, s.viewSize.w);
   }
 }
 
-function apply(tr: Track) {
+function apply(tr: Track, viewW: number) {
   const d = tr.disp!;
   const ap = tr.applied;
   const moved = Math.abs(d.x - ap.x) > 0.15 || Math.abs(d.y - ap.y) > 0.15;
   const resized = Math.abs(d.w - ap.w) > 0.15 || Math.abs(d.h - ap.h) > 0.15;
-  if (!moved && !resized) return;
+  if (!moved && !resized && (tr.labelW || !tr.parts.label)) return;
   const el = tr.el!;
   el.style.transform = `translate3d(${d.x.toFixed(1)}px, ${d.y.toFixed(1)}px, 0)`;
   if (resized) {
@@ -194,10 +197,6 @@ function apply(tr: Track) {
       if (parts.bl) parts.bl.style.transform = `translate3d(0, ${d.h.toFixed(1)}px, 0)`;
       if (parts.br) parts.br.style.transform = `translate3d(${d.w.toFixed(1)}px, ${d.h.toFixed(1)}px, 0)`;
       if (parts.center) parts.center.style.transform = `translate3d(${(d.w / 2).toFixed(1)}px, ${(d.h / 2).toFixed(1)}px, 0)`;
-      if (parts.label) {
-        // The primary target's label sits under its box (top edges are often under HUD panels).
-        parts.label.style.transform = tr.el!.classList.contains('primary') ? `translate3d(0, ${(d.h + 6).toFixed(1)}px, 0)` : '';
-      }
       if (parts.ring) {
         const r = Math.max(24, Math.max(d.w, d.h) * 0.62);
         parts.ring.style.transform = `translate3d(${(d.w / 2).toFixed(1)}px, ${(d.h / 2).toFixed(1)}px, 0) scale(${(r / 100).toFixed(3)})`;
@@ -205,6 +204,15 @@ function apply(tr: Track) {
       ap.w = d.w;
       ap.h = d.h;
     }
+  }
+  const label = tr.parts.label;
+  if (label && tr.kind === 'box') {
+    // The primary target's label sits under its box (top edges are often under HUD panels);
+    // every label is kept on screen horizontally.
+    if (!tr.labelW) tr.labelW = label.offsetWidth;
+    const dx = Math.max(4 - d.x, Math.min(0, viewW - 4 - tr.labelW - d.x));
+    const dy = el.classList.contains('primary') ? d.h + 6 : 0;
+    label.style.transform = `translate3d(${dx.toFixed(1)}px, ${dy.toFixed(1)}px, 0)${dy ? '' : ' translate(0, -100%)'}`;
   }
   ap.x = d.x;
   ap.y = d.y;

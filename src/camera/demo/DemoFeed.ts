@@ -448,8 +448,8 @@ function deskStatic(c: Ctx, W: number, H: number) {
   const sy = H * 0.4;
   const sw = W * 0.54;
   const sh = H * 0.22;
-  c.fillStyle = '#1b1e28';
-  rr(c, sx - W * 0.012, sy - W * 0.012, sw + W * 0.024, sh + W * 0.024, W * 0.012);
+  c.fillStyle = '#10131c';
+  rr(c, sx - W * 0.008, sy - W * 0.008, sw + W * 0.016, sh + W * 0.016, W * 0.012);
   c.fill();
   const scr = c.createLinearGradient(sx, sy, sx + sw, sy + sh);
   scr.addColorStop(0, '#0d2340');
@@ -461,8 +461,12 @@ function deskStatic(c: Ctx, W: number, H: number) {
     c.fillStyle = r() < 0.3 ? 'rgba(255,160,80,0.8)' : 'rgba(120,200,255,0.65)';
     c.fillRect(sx + sw * 0.06 + r() * sw * 0.05, sy + sh * (0.1 + i * 0.058), sw * (0.15 + r() * 0.55), Math.max(1, sh * 0.02));
   }
-  // base
-  c.fillStyle = '#9aa0ad';
+  // notch (MacBook Air 2022+ style)
+  c.fillStyle = '#10131c';
+  rr(c, sx + sw / 2 - W * 0.035, sy - W * 0.008, W * 0.07, H * 0.012, W * 0.006);
+  c.fill();
+  // base — midnight aluminium
+  c.fillStyle = '#2b3345';
   c.beginPath();
   c.moveTo(sx - W * 0.05, sy + sh + W * 0.014);
   c.lineTo(sx + sw + W * 0.05, sy + sh + W * 0.014);
@@ -470,22 +474,39 @@ function deskStatic(c: Ctx, W: number, H: number) {
   c.lineTo(sx - W * 0.07, sy + sh + H * 0.045);
   c.closePath();
   c.fill();
-  c.fillStyle = '#6b707c';
+  c.fillStyle = '#1d2330';
   c.fillRect(sx - W * 0.07, sy + sh + H * 0.045, sw + W * 0.14, H * 0.008);
-  // phone
+  // keyboard rows
+  c.fillStyle = 'rgba(8,10,16,0.65)';
+  for (let k = 0; k < 3; k++) c.fillRect(sx - W * 0.02 + k * W * 0.005, sy + sh + W * 0.02 + k * H * 0.008, sw + W * 0.04 - k * W * 0.01, H * 0.005);
+  // phone — back side: triple camera (triangle), centred logo, flat edges
   const px = W * 0.7;
   const py = H * 0.725;
   c.save();
   c.translate(px + W * 0.08, py + H * 0.055);
   c.rotate(-0.25);
-  c.fillStyle = '#0d0f16';
-  rr(c, -W * 0.075, -H * 0.045, W * 0.15, H * 0.09, W * 0.015);
+  c.fillStyle = '#9da2ab';
+  rr(c, -W * 0.075, -H * 0.045, W * 0.15, H * 0.09, W * 0.014);
   c.fill();
-  const ps = c.createLinearGradient(-W * 0.07, 0, W * 0.07, 0);
-  ps.addColorStop(0, '#3b2a6b');
-  ps.addColorStop(1, '#ff8a3c');
-  c.fillStyle = ps;
-  rr(c, -W * 0.068, -H * 0.039, W * 0.136, H * 0.078, W * 0.01);
+  c.fillStyle = '#c4c8cf';
+  rr(c, -W * 0.071, -H * 0.041, W * 0.142, H * 0.082, W * 0.011);
+  c.fill();
+  c.fillStyle = '#8c9199';
+  rr(c, -W * 0.066, -H * 0.036, W * 0.05, H * 0.042, W * 0.008);
+  c.fill();
+  c.fillStyle = '#0c0e13';
+  for (const [lx, ly] of [
+    [-0.054, -0.026],
+    [-0.054, -0.006],
+    [-0.029, -0.016],
+  ]) {
+    c.beginPath();
+    c.arc(W * lx, H * ly, W * 0.009, 0, Math.PI * 2);
+    c.fill();
+  }
+  c.fillStyle = '#7d828a';
+  c.beginPath();
+  c.arc(W * 0.02, 0, W * 0.008, 0, Math.PI * 2);
   c.fill();
   c.restore();
   // coffee cup
@@ -881,6 +902,11 @@ function drawHeadphones(c: Ctx, W: number, H: number) {
   c.beginPath();
   c.ellipse(cx, cy, W * 0.1, H * 0.05, 0, Math.PI * 1.05, Math.PI * 1.95);
   c.stroke();
+  c.fillStyle = 'rgba(210,215,225,0.8)';
+  c.textAlign = 'center';
+  c.textBaseline = 'middle';
+  c.font = `700 ${Math.round(W * 0.016)}px Rajdhani, sans-serif`;
+  c.fillText('SONY', cx, cy - H * 0.043);
   for (const dx of [-0.105, 0.105]) {
     c.fillStyle = '#1c1e25';
     c.beginPath();
@@ -889,6 +915,38 @@ function drawHeadphones(c: Ctx, W: number, H: number) {
     c.fillStyle = 'rgba(200,170,120,0.35)';
     c.fillRect(cx + W * dx - W * 0.008, cy, W * 0.016, H * 0.004);
   }
+}
+
+function drawCola(c: Ctx, W: number, H: number) {
+  const x = W * 0.84;
+  const y = H * 0.46;
+  const w = W * 0.08;
+  const h = H * 0.23;
+  const body = c.createLinearGradient(x, 0, x + w, 0);
+  body.addColorStop(0, 'rgba(60,20,10,0.9)');
+  body.addColorStop(0.5, 'rgba(120,40,20,0.85)');
+  body.addColorStop(1, 'rgba(50,15,8,0.9)');
+  c.fillStyle = body;
+  rr(c, x, y + h * 0.18, w, h * 0.82, w * 0.25);
+  c.fill();
+  c.beginPath();
+  c.moveTo(x + w * 0.3, y + h * 0.02);
+  c.lineTo(x + w * 0.7, y + h * 0.02);
+  c.lineTo(x + w * 0.95, y + h * 0.2);
+  c.lineTo(x + w * 0.05, y + h * 0.2);
+  c.closePath();
+  c.fill();
+  c.fillStyle = '#d8232a';
+  c.fillRect(x + w * 0.02, y + h * 0.42, w * 0.96, h * 0.26);
+  c.fillStyle = '#e03a30';
+  c.fillRect(x + w * 0.3, y, w * 0.4, h * 0.04);
+  c.fillStyle = '#ffffff';
+  c.textAlign = 'center';
+  c.textBaseline = 'middle';
+  c.font = `italic 700 ${Math.round(w * 0.24)}px Georgia, serif`;
+  c.fillText('Coca-Cola', x + w / 2, y + h * 0.52, w * 0.9);
+  c.font = `600 ${Math.round(w * 0.13)}px Rajdhani, sans-serif`;
+  c.fillText('500ml', x + w / 2, y + h * 0.62);
 }
 
 function drawMonstera(c: Ctx, W: number, H: number) {
@@ -968,6 +1026,7 @@ const STATIC: Record<DemoScene, (c: Ctx, W: number, H: number) => void> = {
     deskStatic(c, W, H);
     drawMonstera(c, W, H);
     drawHeadphones(c, W, H);
+    drawCola(c, W, H);
   },
   menu: menuStatic,
   street: streetStatic,

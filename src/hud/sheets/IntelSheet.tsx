@@ -1,3 +1,4 @@
+import type { Detection, Identification, Verification } from '../../core/types';
 import { relativeJa } from '../../core/util';
 import { headline, shownConfidence } from '../../services/vision/perception';
 import { TIER_LABEL } from '../../services/search/ranking';
@@ -39,32 +40,9 @@ export function IntelSheet() {
               </span>
             )}
           </div>
+          {(det?.identity ?? f.identity)?.note && <p className="idt-note">{(det?.identity ?? f.identity)!.note}</p>}
           <p>{f.summary}</p>
-          {f.identity && det && (
-            <>
-              <h3>Recognition</h3>
-              <dl className="kv">
-                <FragmentKV k="検出（Tier 1）" v={`${det.displayName} · ${Math.round(det.confidence * 100)}% · ${det.source ?? 'local'}`} />
-                <FragmentKV
-                  k="識別（Tier 2）"
-                  v={
-                    f.identity.status === 'identifying'
-                      ? '識別中…'
-                      : f.identity.status === 'unknown'
-                        ? `不明（${Math.round(f.identity.confidence * 100)}%）`
-                        : f.identity.status === 'detected'
-                          ? '未識別（クラウド接続で詳細識別）'
-                          : `${f.identity.name} · ${Math.round(f.identity.confidence * 100)}% · ${f.identity.status === 'possible' ? 'POSSIBLE' : 'IDENTIFIED'} · ${f.identity.source}`
-                  }
-                />
-                {f.identity.candidates && <FragmentKV k="候補" v={f.identity.candidates.map((c) => `${c.name} ${Math.round(c.confidence * 100)}%`).join(' / ')} />}
-                {Object.entries(f.identity.attributes ?? {}).map(([k, v]) => (
-                  <FragmentKV key={k} k={k} v={v} />
-                ))}
-                {det.text && <FragmentKV k="文字" v={det.text} />}
-              </dl>
-            </>
-          )}
+          {det && (det.identity ?? f.identity) && <Provenance idt={(det.identity ?? f.identity)!} det={det} />}
           <div className="row-actions">
             <button className="btn primary" onClick={() => ask('これについて調べて')}>
               <Icon.Search size={14} /> {f.identity?.status === 'unknown' ? '画像で調べる' : '調べる'}
@@ -188,6 +166,129 @@ function FragmentKV({ k, v }: { k: string; v: string }) {
     <>
       <dt>{k}</dt>
       <dd>{v}</dd>
+    </>
+  );
+}
+
+const SRC_LABEL = { visual: '画像', ocr: 'OCR', web: 'WEB', context: '状況' } as const;
+const WEB_STATUS: Record<Verification['status'], string> = {
+  verified: '一致を確認',
+  partial: '一部一致',
+  unverified: '確認できず',
+  contradicted: '不一致',
+  skipped: '未実施',
+};
+
+/**
+ * Where each piece of the answer came from — AI inference (VISUAL ANALYSIS,
+ * OCR), web facts (WEB VERIFIED) and what the image cannot tell (UNKNOWN)
+ * are never mixed.
+ */
+function Provenance({ idt, det }: { idt: Identification; det: Detection }) {
+  const pct = (c: number) => `${Math.round(c * 100)}%`;
+  const v = idt.verification;
+  const mock = idt.source === 'mock';
+  const visual = (idt.features ?? []).filter((x) => x.source !== 'ocr' && x.source !== 'web');
+  const ocr = idt.ocrText?.length ? idt.ocrText : det.text ? [det.text] : [];
+  const status =
+    idt.status === 'identifying'
+      ? '識別中…'
+      : idt.status === 'unknown'
+        ? `特定できません（${pct(idt.confidence)}）`
+        : idt.status === 'detected'
+          ? '未識別（クラウド接続で詳細識別）'
+          : `${idt.status === 'possible' ? 'POSSIBLE' : 'IDENTIFIED'} · ${pct(idt.confidence)}`;
+  return (
+    <>
+      <h3>Identified</h3>
+      <dl className="kv">
+        <FragmentKV k="検出" v={`${det.displayName} · ${pct(det.confidence)}`} />
+        <FragmentKV k="識別" v={status} />
+        {idt.status !== 'identifying' && idt.name && <FragmentKV k="名称" v={idt.note ? `${idt.name}（${idt.note}）` : idt.name} />}
+        {Object.entries(idt.attributes ?? {}).map(([k, val]) => (
+          <FragmentKV key={k} k={k} v={val} />
+        ))}
+        <FragmentKV k="エンジン" v={`${idt.source}${mock ? '（モック）' : ''}`} />
+      </dl>
+      {idt.candidates && idt.candidates.length > 1 && (
+        <>
+          <h3>Candidates</h3>
+          <div className="offers cands">
+            {idt.candidates.map((c, i) => (
+              <div key={c.name} className={`offer ${i === 0 ? 'best' : ''}`} title={c.evidence?.join(' / ')}>
+                <span>
+                  {c.name}
+                  {c.evidence?.length ? <span className="dim ev"> — {c.evidence.slice(0, 3).join('・')}</span> : null}
+                </span>
+                <span className="bar">
+                  <i style={{ width: pct(c.confidence) }} />
+                </span>
+                <span className="num">{pct(c.confidence)}</span>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+      {visual.length > 0 && (
+        <>
+          <h3>Visual analysis <span className="dim">AI推定</span></h3>
+          <dl className="kv">
+            {visual.map((x, i) => (
+              <FragmentKV key={`${x.key}-${i}`} k={x.label} v={`${x.value}${x.source !== 'visual' ? `（${SRC_LABEL[x.source]}）` : ''}`} />
+            ))}
+          </dl>
+        </>
+      )}
+      {ocr.length > 0 && (
+        <>
+          <h3>OCR <span className="dim">読み取った文字</span></h3>
+          <div className="tags">
+            {ocr.map((t) => (
+              <span key={t} className="chip mono">
+                {t}
+              </span>
+            ))}
+          </div>
+        </>
+      )}
+      {v && v.status !== 'skipped' && (
+        <>
+          <h3>
+            Web verified <span className="dim">{WEB_STATUS[v.status]}{mock ? ' · モック' : ''}</span>
+          </h3>
+          {v.matched.length > 0 && <p className="dim">一致：{v.matched.join(' / ')}</p>}
+          {v.facts.length > 0 && (
+            <dl className="kv">
+              {v.facts.map((x) => (
+                <FragmentKV key={x.key} k={x.label} v={x.value} />
+              ))}
+            </dl>
+          )}
+          {v.sources.length > 0 && (
+            <div className="sources">
+              {v.sources.map((src) => (
+                <a key={src.url} className="source" href={src.url} target="_blank" rel="noopener noreferrer">
+                  <span className={`tier tier-${src.tier}`}>{TIER_LABEL[src.tier]}</span>
+                  <span className="t">{src.title}</span>
+                  <span className="p">{src.publisher}</span>
+                </a>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+      {idt.unknown && idt.unknown.length > 0 && (
+        <>
+          <h3>Unknown <span className="dim">画像からは判別できません</span></h3>
+          <div className="tags">
+            {idt.unknown.map((u) => (
+              <span key={u} className="chip unknown">
+                {u}
+              </span>
+            ))}
+          </div>
+        </>
+      )}
     </>
   );
 }

@@ -1,9 +1,10 @@
 import { DEMO_CITY_TEXT, DEMO_MENU_LINES, DEMO_OBJECTS, applySway, cityCarBox, cityWalkerBox, streetCarBox, sway } from '../../camera/demo/geometry';
 import type { BBox, Detection, Identification, OcrResult, SceneAnalysis } from '../../core/types';
-import { clamp, sleep } from '../../core/util';
+import { clamp } from '../../core/util';
 import type { DemoScene, FrameSource, IdentifyRequest, VisionCapabilities, VisionContext, VisionFrame, VisionProvider } from '../contracts';
 import { MOCK_ENTITIES, MOCK_IDENTITY } from '../mock/knowledgeBase';
-import { kindFor, statusFor } from './perception';
+import { IdentificationPipeline } from './identify/pipeline';
+import { mockIdentification, mockOCR, mockUnderstanding, mockVerification } from './identify/providers';
 
 const SCENES: Record<DemoScene, Omit<SceneAnalysis, 'confidence'>> = {
   odaiba: {
@@ -25,8 +26,8 @@ const SCENES: Record<DemoScene, Omit<SceneAnalysis, 'confidence'>> = {
     environment: 'URBAN AREA / 道路 / 商業施設',
   },
   desk: {
-    summary: 'デスクの上のノートPC・ヘッドホン・スマートフォンです',
-    tags: ['PC', 'ガジェット', 'デスク', '作業中'],
+    summary: 'デスクの上のノートPC・スマートフォン・ヘッドホン・飲料ボトルです',
+    tags: ['PC', 'ガジェット', 'デスク', '作業中', '飲料'],
     timeOfDay: 'night',
     environment: '屋内 / オフィス',
     crowd: 'low',
@@ -110,28 +111,16 @@ export class MockVisionService implements VisionProvider {
     return out;
   }
 
-  async identify(req: IdentifyRequest): Promise<Identification> {
-    const key = req.detection.entityId ?? '';
-    const spec = MOCK_IDENTITY[key];
-    await sleep(spec?.delayMs ?? 900);
-    if (!spec) {
-      return { status: 'unknown', kind: kindFor(req.detection.category), name: '', confidence: 0.3, source: 'mock', at: performance.now() };
-    }
-    const status = statusFor(spec.confidence);
-    return {
-      status,
-      kind: spec.kind,
-      name: status === 'unknown' ? '' : spec.name,
-      nameEn: spec.nameEn,
-      detail: spec.detail,
-      confidence: spec.confidence,
-      entityId: key,
-      officialUrl: MOCK_ENTITIES[key]?.profile.officialUrl,
-      attributes: spec.attributes,
-      candidates: spec.candidates,
-      source: 'mock',
-      at: performance.now(),
-    };
+  /** OCR → features → candidates → (web check) with scripted, realistic latency. */
+  private readonly pipe = new IdentificationPipeline({ ocr: mockOCR, understanding: mockUnderstanding, identification: mockIdentification, verification: mockVerification });
+  readonly pipeline = this.pipe.where;
+
+  identify(req: IdentifyRequest): Promise<Identification> {
+    return this.pipe.run(req);
+  }
+
+  verifyIdentity(req: IdentifyRequest, current: Identification): Promise<Identification> {
+    return this.pipe.verifyIdentity(req, current);
   }
 
   async analyzeScene(_frame: FrameSource, detections: Detection[], ctx: VisionContext): Promise<SceneAnalysis> {

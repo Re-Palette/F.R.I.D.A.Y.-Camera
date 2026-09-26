@@ -43,7 +43,8 @@ function useWide() {
 /**
  * Visibility policy for every panel — the heart of the dynamic HUD.
  *  minimal: camera + reticle + target brackets + conversation only
- *  auto:    panels appear when something is identified / asked, then fade
+ *  auto:    the target is described by the thin card next to it (DetectionLayer);
+ *           panels appear only when asked, then fade
  *  full:    everything (tablet / demo / AR-glasses preview)
  */
 function usePolicy() {
@@ -56,8 +57,9 @@ function usePolicy() {
   const scan = mode === 'scan';
   return {
     scene: !min && (scan || full) && mode !== 'translate' && mode !== 'nav',
-    object: !min && hasFocus && (scan || full || mode === 'photo'),
-    info: !min && hasFocus && scan,
+    // The big object card is never permanent: FULL only (AUTO uses the near-object card).
+    object: full && hasFocus && (scan || mode === 'photo'),
+    info: full && hasFocus && scan,
     env: weatherPinned || (full && scan),
     forecast: weatherPinned || (full && scan),
     radar: !min || mode === 'nav',

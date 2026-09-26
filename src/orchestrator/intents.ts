@@ -73,7 +73,7 @@ const RULES: Rule[] = [
     params: (t) => ({ platform: /linkedin|リンクトイン/i.test(t) ? 'linkedin' : /note|ノート/i.test(t) ? 'note' : 'instagram' }),
   },
   { kind: 'scene', re: /(周り|周囲|景色|状況|ここはどこ|今どこ|混雑|混んで|what.*around)/i },
-  { kind: 'product_info', re: /(値段|価格|いくら|最安|スペック|レビュー|口コミ|メーカー)/i },
+  { kind: 'product_info', re: /(値段|価格|いくら|最安|スペック|仕様|レビュー|口コミ|メーカー|CPU|チップ|メモリ|ストレージ|容量|年式|グレード)/i },
   { kind: 'place_info', re: /(営業時間|何時まで|開いて|住所|評価|星いくつ)/i },
   {
     kind: 'search',

@@ -1,4 +1,4 @@
-import type { EntityProfile, Intent } from '../../core/types';
+import type { EntityProfile, Identification, Intent } from '../../core/types';
 import { cardinal, fmtDateJa, fmtDistance, relativeJa, sleep } from '../../core/util';
 import type { Grounding, LLMRequest, LLMService, WorldContext } from '../contracts';
 import { postJson, postStream } from '../http';
@@ -47,8 +47,63 @@ export function identityPhrase(p: EntityProfile): string {
   if (id.status === 'unknown') return `何かは特定できませんでした（確信度${pct}%）。「これについて調べて」と言えば画像検索します。`;
   const brand = id.attributes?.['ブランド'];
   const label = brand && !p.name.toUpperCase().startsWith(brand.toUpperCase()) ? `${brand}の${p.name}` : p.name;
-  if (id.status === 'possible') return `${label}の可能性があります（確信度${pct}%）。`;
-  return `${label}と推定されます。`;
+  const head = id.status === 'possible' ? `${label}の可能性があります（確信度${pct}%）。` : `${label}と推定されます。`;
+  return `${head}${noteSentence(id.note)}${webSentence(id)}`;
+}
+
+/** "モデル：16 Proの可能性" → "モデルは16 Proの可能性があります。" */
+export function noteSentence(note?: string): string {
+  if (!note) return '';
+  const n = note.replace(/^(.+?)：/, '$1は');
+  return /の可能性$/.test(n) ? `${n}があります。` : `${n}。`;
+}
+
+/** What the web check added — kept apart from what was inferred from the image. */
+function webSentence(id: Identification): string {
+  switch (id.verification?.status) {
+    case 'verified':
+      return '公式情報とも一致しました。';
+    case 'partial':
+      return '公式情報とは一部のみ一致しています。';
+    case 'contradicted':
+      return 'ただし、Web上の公式情報とは一致しない点があります。';
+    default:
+      return '';
+  }
+}
+
+const SPEC_ASKS: { re: RegExp; unknown: string[]; fact?: string }[] = [
+  { re: /CPU|チップ|SoC|プロセッサ/i, unknown: ['CPU / SoC'] },
+  { re: /メモリ|RAM/i, unknown: ['メモリ'] },
+  { re: /ストレージ|SSD/i, unknown: ['ストレージ', 'ストレージ容量'] },
+  { re: /容量/, unknown: ['ストレージ容量', 'ストレージ'], fact: 'size' },
+  { re: /年式|何年式|世代/, unknown: ['正確な年式'] },
+  { re: /グレード|トリム/, unknown: ['グレード'] },
+];
+
+/**
+ * Spec questions: answer only what the image, its text or a web source
+ * showed — anything else is said to be unknown, never guessed.
+ */
+export function specAnswer(p: EntityProfile, text: string): string | null {
+  const id = p.identity;
+  if (!id || p.category === 'person') return null;
+  const unknown = id.unknown ?? [];
+  for (const a of SPEC_ASKS) {
+    if (!a.re.test(text)) continue;
+    const fact = a.fact && p.facts.find((x) => x.key === a.fact);
+    if (fact) return `${fact.label}は${fact.value}です。`;
+    if (/世代/.test(text) && id.note) return `${noteSentence(id.note)}画像だけでは世代を確定できません。`;
+    const hit = unknown.find((u) => a.unknown.includes(u));
+    if (hit) return `${hit}は画像からは判別できません。${id.officialUrl ? '公式サイトで確認できます。' : '「詳しく調べて」と言えば検索します。'}`;
+  }
+  if (/スペック|仕様/.test(text) && !p.product) {
+    const web = id.verification?.status === 'verified' || id.verification?.status === 'partial' ? id.verification.facts : [];
+    const seen = web.length ? `公式情報で確認できた内容：${web.map((f) => `${f.label} ${f.value}`).join('、')}。` : '';
+    const unk = unknown.length ? `${unknown.join('・')}は画像からは判別できません。` : '';
+    return seen || unk ? `${seen}${unk}` : null;
+  }
+  return null;
 }
 
 /** Turns grounded tool output into a short, spoken-style Japanese answer. */
@@ -58,6 +113,8 @@ export function verbalize(intent: Intent, g: Grounding | undefined, ctx: WorldCo
     case 'profile': {
       const p = g.profile;
       if (!p) return '対象を特定できませんでした。もう少し近づけてみてください。';
+      const spec = intent.kind !== 'identify' ? specAnswer(p, intent.text) : null;
+      if (spec) return spec;
       if (intent.kind === 'identify' || intent.kind === 'place_info' || intent.kind === 'product_info') {
         const extra = p.product ? `価格は¥${p.product.priceJPY.toLocaleString()}前後です。` : p.place?.hours ? `営業時間は${p.place.hours}。` : '';
         return `${identityPhrase(p)}${p.identity?.status === 'identified' || p.identity?.status === 'possible' ? p.summary.split('。')[0] + '。' : ''}${extra}`;

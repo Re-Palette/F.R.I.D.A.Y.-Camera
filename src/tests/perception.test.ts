@@ -40,7 +40,9 @@ describe('confidence policy', () => {
     expect(headline(det({ id: 'a', identity: ident({ status: 'identifying' }) }))).toBe('IDENTIFYING…');
     expect(headline(det({ id: 'a', identity: ident({}) }))).toBe('VEHICLE IDENTIFIED');
     expect(headline(det({ id: 'a', identity: ident({ status: 'possible', confidence: 0.62 }) }))).toBe('POSSIBLE MATCH');
-    expect(headline(det({ id: 'a', identity: ident({ status: 'unknown', name: '' }) }))).toBe('UNKNOWN OBJECT');
+    expect(headline(det({ id: 'a', category: 'other', identity: ident({ status: 'unknown', name: '' }) }))).toBe('UNKNOWN OBJECT');
+    // category known, model not: not "unknown object"
+    expect(headline(det({ id: 'a', identity: ident({ status: 'unknown', name: '' }) }))).toBe('TARGET DETECTED');
     expect(headline(det({ id: 'a', category: 'food', identity: ident({ kind: 'food', status: 'possible' }) }))).toBe('POSSIBLE DISH');
     expect(headline(det({ id: 'a', category: 'building', identity: ident({ kind: 'building', name: '東京ビッグサイト' }) }))).toBe('BUILDING IDENTIFIED');
     expect(headline(det({ id: 'a', category: 'person' }))).toBe('PERSON DETECTED');
@@ -49,7 +51,8 @@ describe('confidence policy', () => {
   it('shows the generic class until something specific is known', () => {
     expect(shownName(det({ id: 'a' }))).toBe('乗用車');
     expect(shownName(det({ id: 'a', identity: ident({}) }))).toBe('Tesla Model 3');
-    expect(shownName(det({ id: 'a', identity: ident({ status: 'unknown', name: '' }) }))).toBe('不明な物体');
+    expect(shownName(det({ id: 'a', category: 'other', identity: ident({ status: 'unknown', name: '' }) }))).toBe('不明な物体');
+    expect(shownName(det({ id: 'a', identity: ident({ status: 'unknown', name: '' }) }))).toBe('乗用車');
   });
 });
 

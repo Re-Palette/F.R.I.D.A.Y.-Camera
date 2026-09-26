@@ -14,6 +14,8 @@ import type {
   EntityProfile,
   GeoFix,
   Identification,
+  IdentifyStage,
+  IdentityCandidate,
   Intent,
   LocationEstimate,
   MemoryHit,
@@ -29,6 +31,8 @@ import type {
   SocialDraft,
   SocialPlatform,
   Translation,
+  Verification,
+  VisualFeature,
   WeatherReport,
 } from '../core/types';
 
@@ -81,7 +85,41 @@ export interface VisionCapabilities {
   maxInflightIdentify: number;
 }
 
+/**
+ * Identification sub-providers (LEVEL 2 → LEVEL 3). Each can be swapped
+ * independently: Mock / on-device / cloud (Claude, Gemini, OpenAI Vision…).
+ */
+export type ProviderWhere = 'mock' | 'local' | 'cloud' | 'none';
+
+/** Reads text on the target crop (logos, model numbers, packaging). */
+export interface OCRProvider {
+  readonly where: ProviderWhere;
+  readCrop(input: IdentifyRequest): Promise<string[]>;
+}
+
+/** LEVEL 2 — appearance analysis: brand cues, shape, colour, material, layout… */
+export interface ImageUnderstandingProvider {
+  readonly where: ProviderWhere;
+  analyze(input: IdentifyRequest, ocr: string[]): Promise<VisualFeature[]>;
+}
+
+/** LEVEL 3 — specific product / model hypotheses, compared with confidences. */
+export interface IdentificationProvider {
+  readonly where: ProviderWhere;
+  candidates(input: IdentifyRequest, features: VisualFeature[], ocr: string[]): Promise<IdentityCandidate[]>;
+}
+
+/** Checks the best hypothesis against official / trusted sources (never per frame; cached by name). */
+export interface WebVerificationProvider {
+  readonly where: ProviderWhere;
+  verify(candidate: IdentityCandidate, features: VisualFeature[], ctx: VisionContext): Promise<Verification>;
+}
+
 export interface IdentifyRequest {
+  /** Progress callback for the HUD (READING → ANALYZING → MATCHING → VERIFYING). */
+  onStage?: (stage: IdentifyStage) => void;
+  /** Always verify on the web (e.g. the user locked the target to see details). */
+  forceVerify?: boolean;
   detection: Detection;
   /** GPU-cropped, downscaled target (≤ 512 px). Null for providers that don't need pixels. */
   crop: ImageBitmap | null;
@@ -111,8 +149,12 @@ export interface VisionService extends ServiceBase {
   detect(frame: VisionFrame, ctx: VisionContext): Promise<Detection[]>;
   /** Pure inference time of the last detect (ms), if the engine reports it. */
   lastInferMs?: number;
-  /** Tier-2: what exactly is this? Must return status 'unknown' rather than guess. */
+  /** Tier-2 pipeline: OCR → features → candidates → (web verification) → graded result. Never guesses. */
   identify(req: IdentifyRequest): Promise<Identification>;
+  /** Web-verify an existing identity (called when the user locks a target to see details). */
+  verifyIdentity?(req: IdentifyRequest, current: Identification): Promise<Identification>;
+  /** The sub-providers behind `identify`, for display / diagnostics. */
+  readonly pipeline?: { ocr: ProviderWhere; understanding: ProviderWhere; identification: ProviderWhere; verification: ProviderWhere };
   /** Slow path, called every few seconds or on scene change. */
   analyzeScene(frame: FrameSource, detections: Detection[], ctx: VisionContext): Promise<SceneAnalysis>;
   /** Text recognition for signs, menus, documents, screens. */

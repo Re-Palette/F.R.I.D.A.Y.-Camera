@@ -32,9 +32,7 @@ import type {
 import { boxCenter, boxContains, clamp, fmtDateJa, iou, sleep, timeOfDayFor, uid, viewToFrame } from '../core/util';
 import type { DemoScene, Grounding, ServiceRegistry, VisionContext, VisionFrame, VisionService, WorldContext } from '../services/contracts';
 import { toNavTarget } from '../services/places';
-import { createServices } from '../services/registry';
-import { MockVisionService } from '../services/vision/MockVisionService';
-import { OnDeviceVisionService, RemoteVisionService } from '../services/vision/WorkerVisionService';
+import { createServices, createVision } from '../services/registry';
 import { getState, setState, type SheetKind, type Toast } from '../store/useFriday';
 import { evaluateHazards } from './hazards';
 import { IdentificationManager } from './identification';
@@ -232,7 +230,7 @@ export class Orchestrator {
     const wanted = feed === 'demo' ? 'mock' : configured === 'mock' ? 'ondevice' : configured;
     if (this.vision.mode === wanted) return;
     this.vision.dispose();
-    this.vision = wanted === 'ondevice' ? new OnDeviceVisionService() : wanted === 'real' ? new RemoteVisionService() : new MockVisionService();
+    this.vision = createVision(wanted, { search: () => this.services.search });
     this.vision.init().catch(() => {
       this.toast('VISION MODEL LOAD FAILED', 'warn');
     });
@@ -469,6 +467,13 @@ export class Orchestrator {
       this.focusKey = key;
       if (p) void this.loadFocus(p);
       else if (!primaryId) setState({ focus: null, related: [], news: [], recall: null });
+    } else if (p?.identity && s.focus?.identity && s.focus.id === p.id) {
+      // Same answer, refined evidence (web verification, confidence): patch it in place.
+      const a = s.focus.identity;
+      const b = p.identity;
+      if (a.confidence !== b.confidence || a.verification?.status !== b.verification?.status || a.note !== b.note) {
+        setState({ focus: { ...s.focus, identity: b } });
+      }
     }
     if (now - this.lastSummaryAt > 1000) {
       this.lastSummaryAt = now;
@@ -496,7 +501,9 @@ export class Orchestrator {
       })();
       this.profileCache.set(key, p);
     }
-    return p;
+    // The cache is keyed by the answer; evidence (web check, confidence) keeps refining it.
+    const live = det.identity;
+    return live && det.category !== 'person' ? p.then((x) => (x ? { ...x, identity: live } : x)) : p;
   }
 
   private async loadFocus(det: Detection) {
@@ -674,6 +681,8 @@ export class Orchestrator {
     this.lockLastBox = target.bbox;
     // A tapped target is the user's priority: identify it now (or retry an unknown).
     if (!target.identity || target.identity.status === 'unknown') this.identifier.retry(target.id);
+    // Details were requested: confirm against official sources (once per model, cached).
+    else if (target.identity.status === 'identified' || target.identity.status === 'possible') void this.identifier.verify(target.id, target);
     setState({ lockedId: target.id, lockState: 'locked', primaryId: target.id });
     navigator.vibrate?.(20);
     void this.loadFocus(target);

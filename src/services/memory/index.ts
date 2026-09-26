@@ -160,7 +160,7 @@ export class MockMemoryService extends BaseMemoryService {
         id: 'mem-desk',
         createdAt: daysAgo(3, 23, 5),
         tags: ['デスク', 'PC', '仕事', 'ガジェット'],
-        entities: ['Nova Book Pro 14'],
+        entities: ['MacBook Air'],
         place: '自宅',
         scene: '夜の作業デスク',
         timeOfDay: 'night',

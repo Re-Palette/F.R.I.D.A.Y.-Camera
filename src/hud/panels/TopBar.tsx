@@ -6,6 +6,8 @@ import { deriveAIState, primaryDetection, useAIState, useFriday } from '../../st
 import { useNow, useOrch } from '../hooks';
 import { Icon } from '../icons';
 
+export const STAGE_LABEL: Record<string, string> = { reading: 'OCR', analyzing: 'VISION ANALYSIS', matching: 'IDENTIFICATION', verifying: 'WEB VERIFY' };
+
 const STATE_LABEL: Record<string, string> = {
   BOOTING: 'BOOTING',
   IDLE: 'STANDBY',
@@ -27,7 +29,11 @@ export function AIStatus({ compact = false }: { compact?: boolean }) {
     const st = deriveAIState(s);
     if (st === 'SEARCHING') return s.search?.detail ?? s.search?.stage.toUpperCase();
     if (st === 'IDENTIFIED' || st === 'TARGET_LOCKED') return s.focus?.name;
-    if (st === 'IDENTIFYING') return primaryDetection(s)?.displayName;
+    if (st === 'IDENTIFYING') {
+      const d = primaryDetection(s);
+      const stage = d?.identity?.stage;
+      return `${stage ? `${STAGE_LABEL[stage]} · ` : ''}${d?.displayName ?? ''}`;
+    }
     if (st === 'LISTENING') return s.partial || undefined;
     if (st === 'SCANNING') return `${s.detections.length} OBJECTS`;
     return undefined;

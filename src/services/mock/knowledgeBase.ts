@@ -130,69 +130,37 @@ export const MOCK_ENTITIES: Record<string, MockEntity> = {
     'computer',
     0.97,
     {
-      name: 'Nova Book Pro 14',
-      nameEn: 'Nova Book Pro 14',
-      subtitle: 'ノートPC / Aether Labs',
-      summary: '14インチのクリエイター向けノートPC（デモ用の架空製品データ）。',
+      name: 'Apple MacBook Air 13-inch',
+      nameEn: 'Apple MacBook Air 13-inch',
+      subtitle: 'ノートPC / Apple',
+      summary: 'Apple の薄型ノートPC。ディスプレイ上部のノッチとフラットな筐体から、2022年以降の世代と推定されます。',
       facts: [
-        { key: 'maker', label: 'メーカー', value: 'Aether Labs' },
-        { key: 'cpu', label: 'CPU', value: 'A-Series X4 (12 core)' },
+        { key: 'brand', label: 'ブランド', value: 'Apple' },
+        { key: 'family', label: 'シリーズ', value: 'MacBook Air' },
       ],
-      product: {
-        name: 'Nova Book Pro 14',
-        maker: 'Aether Labs',
-        priceJPY: 248800,
-        officialUrl: 'https://example.com/aether/nova-book-pro-14',
-        specs: [
-          { key: 'cpu', label: 'CPU', value: '12コア' },
-          { key: 'mem', label: 'メモリ', value: '32 GB' },
-          { key: 'ssd', label: 'SSD', value: '1 TB' },
-          { key: 'display', label: 'ディスプレイ', value: '14.2" 120Hz' },
-          { key: 'weight', label: '重量', value: '1.55 kg' },
-          { key: 'battery', label: 'バッテリー', value: '最大18時間' },
-        ],
-        rating: 4.6,
-        reviewCount: 1284,
-        reviewSummary: '画面品質とバッテリー持ちの評価が高く、重量と価格に不満の声がある。',
-        similar: [
-          { name: 'Orbit Slim 14', priceJPY: 189800 },
-          { name: 'Vertex Studio 15', priceJPY: 279000 },
-        ],
-        offers: [
-          { store: '公式ストア', priceJPY: 248800 },
-          { store: 'Store A', priceJPY: 239980 },
-          { store: 'Store B', priceJPY: 244500 },
-        ],
-      },
-      keywords: ['ノートPC', 'Nova Book', 'Aether Labs', 'PC'],
+      officialUrl: 'https://www.apple.com/jp/macbook-air/',
+      keywords: ['MacBook Air', 'Apple', 'ノートPC'],
     },
-    [{ id: 'l1', kind: 'official', title: '公式サポート / 保証', detail: '購入後1年間のメーカー保証' }],
+    [{ id: 'l1', kind: 'official', title: 'Apple 公式製品ページ', detail: 'apple.com/jp/macbook-air' }],
   ),
   smartphone: entity('smartphone', 'cell phone', 'phone', 0.93, {
-    name: 'Aether Phone 9',
-    subtitle: 'スマートフォン / Aether Labs',
-    summary: 'デモ用の架空スマートフォン。',
-    facts: [{ key: 'maker', label: 'メーカー', value: 'Aether Labs' }],
-    product: {
-      name: 'Aether Phone 9',
-      maker: 'Aether Labs',
-      priceJPY: 139800,
-      officialUrl: 'https://example.com/aether/phone-9',
-      specs: [
-        { key: 'display', label: '画面', value: '6.3" OLED' },
-        { key: 'camera', label: 'カメラ', value: '48MP ×3' },
-        { key: 'storage', label: 'ストレージ', value: '256 GB' },
-      ],
-      rating: 4.3,
-      reviewCount: 842,
-      reviewSummary: 'カメラ性能の評価が高い。発熱に関する指摘が一部ある。',
-      similar: [{ name: 'Orbit Phone S', priceJPY: 119800 }],
-      offers: [
-        { store: '公式ストア', priceJPY: 139800 },
-        { store: 'Store A', priceJPY: 132000 },
-      ],
-    },
-    keywords: ['スマートフォン', 'Aether Phone'],
+    name: 'Apple iPhone Pro',
+    subtitle: 'スマートフォン / Apple',
+    summary: '背面の3眼カメラ（三角配置）とフラットなフレームから iPhone Pro 系と推定されます。世代は画像だけでは確定できません。',
+    facts: [{ key: 'brand', label: 'ブランド', value: 'Apple' }],
+    officialUrl: 'https://www.apple.com/jp/iphone/',
+    keywords: ['iPhone', 'Apple', 'スマートフォン'],
+  }),
+  cola: entity('cola', 'bottle', 'product', 0.92, {
+    name: 'Coca-Cola Original Taste 500ml',
+    subtitle: '飲料 / 炭酸飲料',
+    summary: 'コカ・コーラのペットボトル（500ml）。ラベルの文字と配色から識別しました。',
+    facts: [
+      { key: 'brand', label: 'ブランド', value: 'Coca-Cola' },
+      { key: 'size', label: '容量表記', value: '500ml（ラベル）' },
+    ],
+    officialUrl: 'https://www.cocacola.co.jp/',
+    keywords: ['コカ・コーラ', 'Coca-Cola', '飲料'],
   }),
   coffee: entity('coffee', 'cup', 'food', 0.88, {
     name: 'カフェラテ',
@@ -429,17 +397,47 @@ export interface MockIdentitySpec {
   nameEn?: string;
   confidence: number;
   detail?: string;
-  candidates?: { name: string; confidence: number }[];
+  candidates?: import('../../core/types').IdentityCandidate[];
   attributes?: Record<string, string>;
+  /** Text the mock OCR reads on the target. */
+  ocr?: string[];
+  /** LEVEL 2 appearance analysis. */
+  features?: import('../../core/types').VisualFeature[];
+  /** What a web check against official pages would return (mock). */
+  verification?: Omit<import('../../core/types').Verification, 'at'>;
   delayMs: number;
 }
+
+const V = (key: import('../../core/types').VisualFeature['key'], label: string, value: string, source: 'visual' | 'ocr' = 'visual') => ({ key, label, value, source });
 
 export const MOCK_IDENTITY: Record<string, MockIdentitySpec> = {
   'rainbow-bridge': { generic: '橋', kind: 'landmark', name: 'レインボーブリッジ', nameEn: 'Rainbow Bridge', confidence: 0.95, detail: '吊り橋 / 1993年開通', delayMs: 900 },
   'tokyo-tower': { generic: '塔', kind: 'landmark', name: '東京タワー', nameEn: 'Tokyo Tower', confidence: 0.91, detail: '電波塔 / 333 m', delayMs: 1200 },
   yakatabune: { generic: '船', kind: 'vehicle', name: '屋形船', confidence: 0.74, detail: '観光クルーズ船の可能性', delayMs: 1400 },
   'big-sight': { generic: '建物', kind: 'building', name: '東京ビッグサイト', nameEn: 'Tokyo Big Sight', confidence: 0.94, detail: '国際展示場 / 江東区有明', delayMs: 1500 },
-  'car-tesla': { generic: '乗用車', kind: 'vehicle', name: 'Tesla Model 3', confidence: 0.87, detail: '電気自動車（セダン）', attributes: { メーカー: 'Tesla' }, delayMs: 1100 },
+  'car-tesla': {
+    generic: '乗用車',
+    kind: 'vehicle',
+    name: 'Tesla Model 3',
+    confidence: 0.89,
+    features: [
+      V('design', 'フロント', 'グリルレス・薄型ヘッドライト'),
+      V('shape', 'シルエット', 'ファストバックのセダン'),
+      V('color', 'カラー', 'ホワイト'),
+      V('other', 'ナンバープレート', '読み取り・保存しません'),
+    ],
+    candidates: [
+      { name: 'Tesla Model 3', brand: 'Tesla', family: 'Model 3', variant: '2024 refresh / Highland', confidence: 0.89, evidence: ['薄型ヘッドライト', 'グリルレス'] },
+      { name: 'Tesla Model Y', brand: 'Tesla', family: 'Model Y', confidence: 0.31, evidence: ['フロント形状'] },
+    ],
+    verification: {
+      status: 'verified',
+      matched: ['Tesla 公式の Model 3 外観（薄型ライト）と一致（モック照合）'],
+      sources: [{ title: 'Model 3 | Tesla', url: 'https://www.tesla.com/ja_jp/model3', publisher: 'Tesla', tier: 'official' }],
+      facts: [{ key: 'type', label: '種別', value: '電気自動車（セダン）' }],
+    },
+    delayMs: 1200,
+  },
   'car-prius': {
     generic: '乗用車',
     kind: 'vehicle',
@@ -456,9 +454,107 @@ export const MOCK_IDENTITY: Record<string, MockIdentitySpec> = {
   'traffic-light': { generic: '信号機', kind: 'generic', name: '信号機', confidence: 0.84, detail: '車両用', delayMs: 700 },
   'sign-bigsight': { generic: '標識', kind: 'text', name: '東京ビッグサイト Tokyo Big Sight →', confidence: 0.9, detail: '日本語 / 英語', delayMs: 600 },
   'unknown-box': { generic: '物体', kind: 'generic', name: '', confidence: 0.31, detail: '形状から特定できません', delayMs: 1600 },
-  laptop: { generic: 'ノートPC', kind: 'product', name: 'Nova Book Pro 14', confidence: 0.89, detail: 'Aether Labs（デモ用架空製品）', delayMs: 1000 },
-  headphones: { generic: 'ヘッドホン', kind: 'product', name: 'SONY WH-1000XM6', nameEn: 'Sony WH-1000XM6', confidence: 0.96, detail: 'ワイヤレス NC ヘッドホン', attributes: { ブランド: 'SONY', 型番: 'WH-1000XM6' }, delayMs: 1200 },
-  smartphone: { generic: 'スマートフォン', kind: 'product', name: 'Aether Phone 9', confidence: 0.71, detail: 'デモ用架空製品', delayMs: 1100 },
+  laptop: {
+    generic: 'ノートPC',
+    kind: 'product',
+    name: 'Apple MacBook Air 13-inch',
+    confidence: 0.9,
+    ocr: [],
+    features: [
+      V('design', 'デザイン', 'フラットな薄型アルミニウム筐体（Apple 系の設計）'),
+      V('display', 'ディスプレイ', '上部中央にノッチ・狭額縁'),
+      V('color', 'カラー', 'ミッドナイト（濃紺）'),
+      V('material', '素材', 'アルミニウム（外観から推定）'),
+      V('layout', 'キーボード', 'フルハイトのファンクションキー列'),
+    ],
+    candidates: [
+      { name: 'Apple MacBook Air 13-inch', brand: 'Apple', family: 'MacBook Air', model: '13-inch', variant: 'M2 / M3 / M4 世代', confidence: 0.9, evidence: ['ノッチ付きディスプレイ', 'フラット筐体', 'ミッドナイト色'] },
+      { name: 'Apple MacBook Pro 14-inch', brand: 'Apple', family: 'MacBook Pro', model: '14-inch', confidence: 0.46, evidence: ['ノッチ付きディスプレイ'] },
+      { name: 'Microsoft Surface Laptop', brand: 'Microsoft', family: 'Surface Laptop', confidence: 0.12 },
+    ],
+    verification: {
+      status: 'verified',
+      matched: ['Apple 公式製品ページの外観（ノッチ付き 13.6 インチ・ミッドナイト）と一致（モック照合）'],
+      sources: [{ title: 'MacBook Air - Apple（日本）', url: 'https://www.apple.com/jp/macbook-air/', publisher: 'Apple', tier: 'official' }],
+      facts: [
+        { key: 'display', label: 'ディスプレイ', value: '13.6 インチ Liquid Retina（13-inch モデル）' },
+        { key: 'color', label: 'カラー展開', value: 'ミッドナイトを含む' },
+      ],
+    },
+    delayMs: 1500,
+  },
+  headphones: {
+    generic: 'ヘッドホン',
+    kind: 'product',
+    name: 'Sony WH-1000XM6',
+    confidence: 0.86,
+    ocr: ['SONY'],
+    features: [
+      V('design', 'デザイン', 'オーバーイヤー・ヘッドバンド型'),
+      V('color', 'カラー', 'ブラック'),
+      V('layout', 'ボタン配置', '左ハウジングに物理ボタン'),
+    ],
+    candidates: [
+      { name: 'Sony WH-1000XM6', brand: 'Sony', family: 'WH-1000X', model: 'WH-1000XM6', confidence: 0.86, evidence: ['ハウジング形状', 'ヘッドバンド形状'] },
+      { name: 'Sony WH-1000XM5', brand: 'Sony', family: 'WH-1000X', model: 'WH-1000XM5', confidence: 0.58, evidence: ['ハウジング形状'] },
+      { name: 'Bose QuietComfort Ultra Headphones', brand: 'Bose', confidence: 0.1 },
+    ],
+    verification: {
+      status: 'verified',
+      matched: ['ソニー公式ヘッドホンページの製品外観と一致（モック照合）'],
+      sources: [{ title: 'ヘッドホン | ソニー', url: 'https://www.sony.jp/headphone/', publisher: 'Sony', tier: 'official' }],
+      facts: [{ key: 'cat', label: 'カテゴリー', value: 'ワイヤレス・ノイズキャンセリングヘッドホン' }],
+    },
+    delayMs: 1300,
+  },
+  smartphone: {
+    generic: 'スマートフォン',
+    kind: 'product',
+    name: 'Apple iPhone Pro',
+    confidence: 0.71,
+    ocr: [],
+    features: [
+      V('layout', 'カメラ配置', '背面左上に3眼（三角配置）＋フラッシュ'),
+      V('logo', 'ロゴ', '背面中央に Apple ロゴ'),
+      V('design', 'フレーム', 'フラットエッジ'),
+      V('color', 'カラー', 'シルバー系'),
+    ],
+    candidates: [
+      { name: 'Apple iPhone 16 Pro', brand: 'Apple', family: 'iPhone Pro', model: '16 Pro', confidence: 0.71, evidence: ['3眼・三角配置', 'フラットエッジ'] },
+      { name: 'Apple iPhone 15 Pro', brand: 'Apple', family: 'iPhone Pro', model: '15 Pro', confidence: 0.52, evidence: ['3眼・三角配置'] },
+      { name: 'Samsung Galaxy S25 Ultra', brand: 'Samsung', family: 'Galaxy S', model: 'S25 Ultra', confidence: 0.08 },
+    ],
+    verification: {
+      status: 'partial',
+      matched: ['Apple 公式ページ: 3眼・三角配置は複数世代で共通のため世代は確定できません（モック照合）'],
+      sources: [{ title: 'iPhone - Apple（日本）', url: 'https://www.apple.com/jp/iphone/', publisher: 'Apple', tier: 'official' }],
+      facts: [],
+    },
+    delayMs: 1400,
+  },
+  cola: {
+    generic: 'ボトル',
+    kind: 'product',
+    name: 'Coca-Cola Original Taste 500ml',
+    confidence: 0.88,
+    ocr: ['Coca-Cola', 'Original Taste', '500ml'],
+    features: [
+      V('package', 'パッケージ', 'ペットボトル・赤いラベル'),
+      V('logo', 'ロゴ', '白い筆記体ロゴ'),
+      V('shape', '形状', 'くびれのあるボトル形状'),
+    ],
+    candidates: [
+      { name: 'Coca-Cola Original Taste 500ml', brand: 'Coca-Cola', family: 'Coca-Cola', model: 'Original Taste 500ml', confidence: 0.88, evidence: ['赤ラベル', '筆記体ロゴ'] },
+      { name: 'Coca-Cola Zero Sugar 500ml', brand: 'Coca-Cola', family: 'Coca-Cola', model: 'Zero Sugar 500ml', confidence: 0.21, evidence: ['ボトル形状'] },
+    ],
+    verification: {
+      status: 'verified',
+      matched: ['コカ・コーラ公式サイトの製品ラベルと一致（モック照合）'],
+      sources: [{ title: 'コカ・コーラ 公式サイト', url: 'https://www.cocacola.co.jp/', publisher: 'Coca-Cola Japan', tier: 'official' }],
+      facts: [],
+    },
+    delayMs: 1100,
+  },
   coffee: {
     generic: 'カップ',
     kind: 'food',
@@ -471,7 +567,19 @@ export const MOCK_IDENTITY: Record<string, MockIdentitySpec> = {
     ],
     delayMs: 900,
   },
-  monstera: { generic: '観葉植物', kind: 'plant', name: 'モンステラ', nameEn: 'Monstera deliciosa', confidence: 0.91, detail: 'サトイモ科', attributes: { 学名: 'Monstera deliciosa' }, delayMs: 1300 },
+  monstera: {
+    generic: '観葉植物',
+    kind: 'plant',
+    name: 'モンステラ・デリシオーサ',
+    nameEn: 'Monstera deliciosa',
+    confidence: 0.91,
+    features: [V('shape', '葉', '深い切れ込みと穴のある大型の葉'), V('other', '生育', '鉢植え')],
+    candidates: [
+      { name: 'モンステラ・デリシオーサ', brand: 'サトイモ科', family: 'モンステラ属', model: 'Monstera deliciosa', confidence: 0.91, evidence: ['葉の切れ込み'] },
+      { name: 'ヒメモンステラ', brand: 'サトイモ科', family: 'ラフィドフォラ属', confidence: 0.18 },
+    ],
+    delayMs: 1300,
+  },
   cat: { generic: '猫', kind: 'animal', name: '猫', nameEn: 'Cat', confidence: 0.99, detail: 'イエネコ', delayMs: 500 },
   menu: { generic: 'テキスト', kind: 'text', name: 'CAFÉ DU PONT メニュー', confidence: 0.96, detail: 'フランス語', delayMs: 600 },
   car: { generic: '乗用車', kind: 'vehicle', name: 'セダン', confidence: 0.58, detail: 'ヘッドライトのみで車種は判別困難', delayMs: 1000 },

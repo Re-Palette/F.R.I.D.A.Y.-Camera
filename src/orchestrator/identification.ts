@@ -11,7 +11,7 @@
  */
 import type { Detection, Identification, PlaceInfo, SceneAnalysis } from '../core/types';
 import type { VisionContext, VisionProvider } from '../services/contracts';
-import { kindFor, pickToIdentify, reassociate, sanitize, type TrackMeta } from '../services/vision/perception';
+import { kindFor, pickToIdentify, reassociate, sanitize, targetChanged, type TrackMeta } from '../services/vision/perception';
 
 export interface IdentificationDeps {
   vision: () => VisionProvider;
@@ -46,6 +46,12 @@ export class IdentificationManager {
       }
       m.lastSeen = now;
       m.bbox = d.bbox;
+      if (m.category !== d.category) {
+        m.category = d.category;
+        m.stale = !!m.identity;
+      } else if (m.identity && !m.requested && m.identifiedBox && now - m.identity.at > 3000 && targetChanged(m.identifiedBox, d.bbox)) {
+        m.stale = true; // closer / different view → new detail may be visible
+      }
     }
     for (const [id, m] of this.meta) {
       if (seen.has(id) || now - m.lastSeen < LOST_AFTER_MS) continue;
@@ -67,6 +73,10 @@ export class IdentificationManager {
     if (d.identity) return d; // geo anchors / cloud regions carry their own
     const m = this.meta.get(d.id);
     if (!m) return d;
+    if (m.identity && m.requested && m.stale) {
+      // Re-analysing a changed target: keep showing the previous result (no flicker).
+      return { ...d, identity: { ...m.identity, stage: m.stage } };
+    }
     if (m.identity) {
       // Let a failed / unknown result be retried later (lighting, angle may improve).
       if (m.identity.status === 'unknown' && now - m.identity.at > RETRY_UNKNOWN_MS) {
@@ -76,7 +86,7 @@ export class IdentificationManager {
       }
       return { ...d, identity: m.identity };
     }
-    if (m.requested) return { ...d, identity: { status: 'identifying', kind: kindFor(d.category), name: '', confidence: d.confidence, source: d.source ?? 'local', at: m.requested } };
+    if (m.requested) return { ...d, identity: { status: 'identifying', kind: kindFor(d.category), name: '', confidence: d.confidence, stage: m.stage, source: d.source ?? 'local', at: m.requested } };
     return d;
   }
 
@@ -84,15 +94,54 @@ export class IdentificationManager {
     const m = this.meta.get(d.id);
     if (!m) return;
     m.requested = performance.now();
+    m.stage = 'reading';
     this.inflight++;
     try {
-      const crop = vision.capabilities.identifyNeedsCrop ? await this.deps.crop(d) : null;
-      const identity = await vision.identify({ detection: d, crop, ctx: this.deps.ctx(), scene: this.deps.scene(), nearby: this.deps.nearby() });
+      // Every provider gets the crop now: OCR, colour and appearance all need pixels.
+      const crop = await this.deps.crop(d);
+      const identity = await vision.identify({
+        detection: d,
+        crop,
+        ctx: this.deps.ctx(),
+        scene: this.deps.scene(),
+        nearby: this.deps.nearby(),
+        onStage: (st) => (m.stage = st),
+      });
       m.identity = identity;
+      m.identifiedBox = { ...m.bbox };
+      m.stale = false;
+      m.requested = undefined;
+      m.stage = undefined;
     } catch {
-      m.identity = { status: 'unknown', kind: kindFor(d.category), name: '', confidence: 0, detail: '識別に失敗しました', source: 'local', at: performance.now() };
+      if (!m.identity) m.identity = { status: 'unknown', kind: kindFor(d.category), name: '', confidence: 0, detail: '識別に失敗しました', source: 'local', at: performance.now() };
+      m.stale = false;
+      m.requested = undefined;
+      m.stage = undefined;
     } finally {
       this.inflight--;
+    }
+  }
+
+  /**
+   * The user locked this target to see details: fetch official facts for it
+   * (web verification) if it's identified but not yet verified.
+   */
+  async verify(id: string, det: Detection): Promise<void> {
+    const vision = this.deps.vision();
+    const m = this.meta.get(id);
+    if (!m?.identity || m.requested || m.identity.verification || !vision.verifyIdentity) return;
+    if (m.identity.status !== 'identified' && m.identity.status !== 'possible') return;
+    m.requested = performance.now();
+    m.stale = true; // keep showing the current result while verifying
+    m.stage = 'verifying';
+    try {
+      m.identity = await vision.verifyIdentity({ detection: det, crop: null, ctx: this.deps.ctx(), forceVerify: true, onStage: (st) => (m.stage = st) }, m.identity);
+    } catch {
+      /* keep the unverified identity */
+    } finally {
+      m.requested = undefined;
+      m.stale = false;
+      m.stage = undefined;
     }
   }
 

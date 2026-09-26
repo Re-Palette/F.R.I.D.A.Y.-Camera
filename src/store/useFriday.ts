@@ -234,7 +234,7 @@ export function deriveAIState(s: FridayState, now = Date.now()): AIState {
   if (s.busy === 'searching') return 'SEARCHING';
   if (s.busy === 'thinking') return 'THINKING';
   const target = primaryDetection(s);
-  if (target?.identity?.status === 'identifying') return 'IDENTIFYING';
+  if (target?.identity?.status === 'identifying' || target?.identity?.stage) return 'IDENTIFYING';
   if (s.listening && s.partial) return 'LISTENING';
   if (s.lockState === 'locked') return 'TARGET_LOCKED';
   if (s.analyzingUntil > now) return 'ANALYZING';

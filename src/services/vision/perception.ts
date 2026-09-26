@@ -6,6 +6,8 @@
 import type {
   BBox,
   Detection,
+  IdentityCandidate,
+  Verification,
   GeoFix,
   Identification,
   IdentityKind,
@@ -18,9 +20,9 @@ import { angleDelta, boxCenter, iou } from '../../core/util';
 
 // ─── Confidence policy ─────────────────────────────────────────────────────
 
-/** ≥ 0.80 → IDENTIFIED, ≥ 0.50 → POSSIBLE MATCH, otherwise UNKNOWN. Never overstate. */
+/** ≥ 0.80 → IDENTIFIED, ≥ 0.40 → POSSIBLE MATCH (named only as specifically as justified), otherwise UNKNOWN. */
 export const IDENTIFIED_AT = 0.8;
-export const POSSIBLE_AT = 0.5;
+export const POSSIBLE_AT = 0.4;
 
 export function statusFor(confidence: number): Exclude<IdentityStatus, 'detected' | 'identifying'> {
   if (confidence >= IDENTIFIED_AT) return 'identified';
@@ -83,17 +85,17 @@ export function headline(d: Pick<Detection, 'category' | 'identity' | 'source'>)
   if (kind === 'text') return 'TEXT DETECTED';
   if (!id || id.status === 'detected') return 'TARGET DETECTED';
   if (id.status === 'identifying') return 'IDENTIFYING…';
-  if (id.status === 'unknown') return 'UNKNOWN OBJECT';
+  if (id.status === 'unknown') return d.category === 'other' ? 'UNKNOWN OBJECT' : 'TARGET DETECTED';
   if (id.status === 'possible') return kind === 'food' ? 'POSSIBLE DISH' : d.source === 'geo' ? `${KIND_WORD[kind]} · 推定` : 'POSSIBLE MATCH';
   if (kind === 'animal') return 'ANIMAL DETECTED';
   return `${KIND_WORD[kind]} IDENTIFIED`;
 }
 
 /** Name to show: the specific identity when we have one, else the generic class. */
-export function shownName(d: Pick<Detection, 'displayName' | 'identity'>): string {
+export function shownName(d: Pick<Detection, 'displayName' | 'identity' | 'category'>): string {
   const id = d.identity;
   if (id && (id.status === 'identified' || id.status === 'possible') && id.name) return id.name;
-  if (id?.status === 'unknown') return '不明な物体';
+  if (id?.status === 'unknown') return d.category === 'other' ? '不明な物体' : d.displayName;
   return d.displayName;
 }
 
@@ -173,6 +175,26 @@ export interface TrackMeta {
   requested?: number;
   bbox: BBox;
   category: ObjectCategory;
+  /** Current pipeline stage while identifying. */
+  stage?: Identification['stage'];
+  /** Box at the time of the last identification (to detect a changed target). */
+  identifiedBox?: BBox;
+  /** Target changed → re-identify, while still showing the previous identity. */
+  stale?: boolean;
+}
+
+/**
+ * Re-analyse only when the target really changed: much bigger/smaller (moved
+ * closer / farther — new detail visible) or a different shape.
+ */
+export function targetChanged(before: BBox, now: BBox): boolean {
+  const a0 = before.w * before.h;
+  const a1 = now.w * now.h;
+  if (!a0 || !a1) return false;
+  const areaRatio = a1 / a0;
+  const ar0 = before.w / before.h;
+  const ar1 = now.w / now.h;
+  return areaRatio > 2.2 || areaRatio < 0.45 || Math.abs(ar1 - ar0) / ar0 > 0.35;
 }
 
 /**
@@ -190,7 +212,7 @@ export function pickToIdentify(
   const eligible = dets.filter((d) => {
     if (d.category === 'person' || d.source === 'ocr' || d.source === 'geo') return false;
     const m = meta.get(d.id);
-    if (!m || m.identity || m.requested) return false;
+    if (!m || m.requested || (m.identity && !m.stale)) return false;
     const urgent = d.id === opts.lockedId;
     return urgent || (opts.now - m.firstSeen >= opts.stableMs && d.confidence >= 0.45);
   });
@@ -334,4 +356,182 @@ export function detectLang(text: string): string {
 
 export function isUncertain(id?: Identification | null): boolean {
   return !id || id.status === 'possible' || id.status === 'unknown';
+}
+
+// ─── LEVEL 3: graded naming from compared candidates ─────────────────────────
+
+const LEVEL_WORD: Partial<Record<IdentityKind, string>> = {
+  product: 'モデル',
+  vehicle: 'モデル',
+  plant: '種',
+  animal: '品種',
+  food: 'メニュー',
+  building: '施設',
+  landmark: '施設',
+};
+
+export interface GradedIdentity {
+  status: 'identified' | 'possible' | 'unknown';
+  name: string;
+  note?: string;
+  confidence: number;
+  hierarchy: { brand?: string; family?: string; model?: string; variant?: string };
+}
+
+/**
+ * Picks the most specific name the evidence supports.
+ *   ≥ 0.90  "Apple MacBook Air 13-inch"
+ *   ≥ 0.80  "Apple MacBook Air 13-inch" + "M3の可能性"
+ *   ≥ 0.60  "Apple MacBook Air"          + "モデル：13-inch / M2・M3系の可能性"
+ *   ≥ 0.40  "MacBook系ノートPC"           + "正確なモデルは判別できません"
+ *   else    unknown                      + "詳細モデルを特定できません"
+ * Two near-equal candidates can never be IDENTIFIED at model level.
+ */
+export function gradeIdentity(candidates: IdentityCandidate[], kind: IdentityKind, genericJa: string): GradedIdentity {
+  const sorted = [...candidates].sort((a, b) => b.confidence - a.confidence);
+  const top = sorted[0];
+  if (!top) return { status: 'unknown', name: '', note: '詳細モデルを特定できません', confidence: 0, hierarchy: {} };
+  const second = sorted[1];
+  const gap = top.confidence - (second?.confidence ?? 0);
+  let c = top.confidence;
+  if (second && gap < 0.1) c = Math.min(c, 0.75);
+  const hierarchy = { brand: top.brand, family: top.family, model: top.model, variant: top.variant };
+  const word = LEVEL_WORD[kind] ?? 'モデル';
+  const coarse = [top.brand, top.family].filter(Boolean).join(' ');
+  // Generation / trim is rarely provable from an image — always a possibility, never a fact.
+  if (c >= 0.9) return { status: 'identified', name: top.name, note: top.variant ? `${top.variant}の可能性` : undefined, confidence: c, hierarchy };
+  if (c >= IDENTIFIED_AT) return { status: 'identified', name: top.name, note: top.variant ? `${top.variant}の可能性` : undefined, confidence: c, hierarchy };
+  if (c >= 0.6) {
+    const finer = [top.model, top.variant].filter(Boolean).join(' / ');
+    if (coarse && coarse !== top.name) return { status: 'possible', name: coarse, note: finer ? `${word}：${finer}の可能性` : undefined, confidence: c, hierarchy };
+    return { status: 'possible', name: top.name, note: second ? `候補：${second.name}` : undefined, confidence: c, hierarchy };
+  }
+  if (c >= POSSIBLE_AT) {
+    const base = top.family ?? top.brand;
+    return { status: 'possible', name: base ? `${base}系${genericJa}` : genericJa, note: `正確な${word}は判別できません`, confidence: c, hierarchy: { brand: top.brand, family: top.family } };
+  }
+  return { status: 'unknown', name: '', note: `詳細${word}を特定できません`, confidence: c, hierarchy: {} };
+}
+
+/** Web evidence moves confidence — but never above 0.98, and contradictions hurt. */
+export function applyVerification(confidence: number, v?: Verification | null): number {
+  if (!v) return confidence;
+  switch (v.status) {
+    case 'verified':
+      return Math.min(0.98, confidence + 0.06);
+    case 'partial':
+      return Math.min(0.95, confidence + 0.02);
+    case 'contradicted':
+      return Math.max(0, confidence - 0.25);
+    default:
+      return confidence;
+  }
+}
+
+/** Search only when it can change the answer: ambiguous or not-quite-certain, but plausible. */
+export function needsVerification(candidates: IdentityCandidate[], kind: IdentityKind): boolean {
+  if (!['product', 'vehicle', 'building', 'landmark', 'food'].includes(kind)) return false;
+  const [top, second] = [...candidates].sort((a, b) => b.confidence - a.confidence);
+  if (!top || top.confidence < POSSIBLE_AT) return false;
+  return top.confidence < 0.9 || (!!second && top.confidence - second.confidence < 0.2);
+}
+
+/** Properties an image can't reveal — shown as UNKNOWN instead of guessed. */
+export function unknownFields(kind: IdentityKind, label: string): string[] {
+  if (label === 'laptop' || label === 'computer') return ['CPU / SoC', 'メモリ', 'ストレージ'];
+  if (label === 'cell phone' || label === 'phone') return ['ストレージ容量', 'SIM / キャリア'];
+  if (kind === 'vehicle') return ['グレード', '正確な年式'];
+  if (kind === 'product') return ['購入時期', '個体の状態'];
+  if (kind === 'food') return ['店舗（確定）', 'カロリー（正確）'];
+  return [];
+}
+
+/** Local brand / model extraction from OCR text (runs on-device, no network). */
+export const BRAND_PATTERNS: { re: RegExp; brand: string; kinds?: IdentityKind[]; model?: (m: RegExpMatchArray) => { family?: string; model?: string; name: string } }[] = [
+  { re: /\bWH-?1000XM(\d)\b/i, brand: 'Sony', model: (m) => ({ family: 'WH-1000X', model: `WH-1000XM${m[1]}`, name: `Sony WH-1000XM${m[1]}` }) },
+  { re: /\bWF-?1000XM(\d)\b/i, brand: 'Sony', model: (m) => ({ family: 'WF-1000X', model: `WF-1000XM${m[1]}`, name: `Sony WF-1000XM${m[1]}` }) },
+  { re: /\bSONY\b/i, brand: 'Sony' },
+  { re: /\bEOS\s?(R\d+|R)\b/i, brand: 'Canon', model: (m) => ({ family: 'EOS', model: `EOS ${m[1].toUpperCase()}`, name: `Canon EOS ${m[1].toUpperCase()}` }) },
+  { re: /\bCanon\b/i, brand: 'Canon' },
+  { re: /\bRTX\s?(\d{4})(\s?Ti)?\b/i, brand: 'NVIDIA', model: (m) => ({ family: 'GeForce RTX', model: `RTX ${m[1]}${m[2] ? ' Ti' : ''}`, name: `NVIDIA GeForce RTX ${m[1]}${m[2] ? ' Ti' : ''}` }) },
+  { re: /\bMacBook\s?(Air|Pro)\b/i, brand: 'Apple', model: (m) => ({ family: `MacBook ${m[1][0].toUpperCase()}${m[1].slice(1).toLowerCase()}`, name: `Apple MacBook ${m[1][0].toUpperCase()}${m[1].slice(1).toLowerCase()}` }) },
+  { re: /\biPhone\s?(\d{2})\s?(Pro Max|Pro|Plus|mini)?\b/i, brand: 'Apple', model: (m) => ({ family: 'iPhone', model: `iPhone ${m[1]}${m[2] ? ` ${m[2]}` : ''}`, name: `Apple iPhone ${m[1]}${m[2] ? ` ${m[2]}` : ''}` }) },
+  { re: /\bGalaxy\s?S(\d{2})(\s?Ultra|\+)?\b/i, brand: 'Samsung', model: (m) => ({ family: 'Galaxy S', model: `Galaxy S${m[1]}${m[2] ?? ''}`, name: `Samsung Galaxy S${m[1]}${m[2] ?? ''}` }) },
+  { re: /\bCoca-?Cola\b/i, brand: 'Coca-Cola', model: () => ({ family: 'Coca-Cola', name: 'Coca-Cola' }) },
+  { re: /\bNIKE\b/i, brand: 'Nike' },
+  { re: /\bAir\s?Force\s?1\b/i, brand: 'Nike', model: () => ({ family: 'Air Force 1', name: 'Nike Air Force 1' }) },
+  { re: /\bPRIUS\b/i, brand: 'Toyota', model: () => ({ family: 'Prius', name: 'Toyota Prius' }) },
+  { re: /\bTESLA\b/i, brand: 'Tesla' },
+];
+
+/** OCR text → candidate hints with evidence. Text alone is never taken as final (it's merged with visual evidence). */
+export function candidatesFromText(texts: string[]): IdentityCandidate[] {
+  const joined = texts.join(' ');
+  const out: IdentityCandidate[] = [];
+  for (const p of BRAND_PATTERNS) {
+    const m = joined.match(p.re);
+    if (!m) continue;
+    const spec = p.model?.(m);
+    const size = joined.match(/(\d{3,4})\s?ml\b/i);
+    const name = spec ? `${spec.name}${p.brand === 'Coca-Cola' && size ? ` ${size[1]}ml` : ''}` : p.brand;
+    if (out.some((c) => c.name === name)) continue;
+    out.push({ name, brand: p.brand, family: spec?.family, model: spec?.model ?? (size ? `${size[1]}ml` : undefined), confidence: spec?.model ? 0.72 : spec ? 0.6 : 0.45, evidence: [`OCR: ${m[0]}`] });
+  }
+  return out;
+}
+
+/**
+ * Merges hypotheses from different evidence (vision model, OCR, catalogue):
+ * agreeing sources reinforce each other, the best evidence per name wins.
+ */
+export function mergeCandidates(...lists: IdentityCandidate[][]): IdentityCandidate[] {
+  const byName = new Map<string, IdentityCandidate>();
+  const key = (c: IdentityCandidate) => c.name.toLowerCase().replace(/\s+/g, ' ');
+  for (const list of lists) {
+    for (const c of list) {
+      const k = key(c);
+      // Same thing named at different specificity ("Coca-Cola 500ml" ⊂ "Coca-Cola Original Taste 500ml").
+      const tokens = (x: string) => x.split(/[\s/]+/).filter(Boolean);
+      const within = (a: string, b: string) => tokens(a).every((t) => tokens(b).includes(t));
+      const prev = byName.get(k) ?? [...byName.values()].find((p) => within(k, key(p)) || within(key(p), k));
+      if (!prev) {
+        byName.set(k, { ...c, evidence: [...(c.evidence ?? [])] });
+        continue;
+      }
+      // Independent agreement: 1 - (1-a)(1-b), capped.
+      const merged = Math.min(0.97, 1 - (1 - prev.confidence) * (1 - c.confidence * 0.6));
+      const richer = (c.model ? 1 : 0) + (c.variant ? 1 : 0) > (prev.model ? 1 : 0) + (prev.variant ? 1 : 0) ? c : prev;
+      byName.delete(key(prev));
+      byName.set(key(richer), { ...prev, ...richer, confidence: Math.max(prev.confidence, merged), evidence: [...new Set([...(prev.evidence ?? []), ...(c.evidence ?? [])])] });
+    }
+  }
+  return [...byName.values()].sort((a, b) => b.confidence - a.confidence);
+}
+
+/** Dominant colour of a crop → product colour words (local visual feature). */
+export function colorName(r: number, g: number, b: number): string {
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const l = (max + min) / 2 / 255;
+  const s = max === min ? 0 : (max - min) / (255 - Math.abs(max + min - 255));
+  if (s < 0.18) {
+    if (l > 0.82) return 'ホワイト';
+    if (l > 0.6) return 'シルバー';
+    if (l > 0.35) return 'グレー（スペースグレイ系）';
+    return b > r + 6 && l > 0.12 ? 'ミッドナイト（濃紺）' : 'ブラック';
+  }
+  const h = (() => {
+    const d = max - min;
+    let x = max === r ? ((g - b) / d) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
+    x *= 60;
+    return x < 0 ? x + 360 : x;
+  })();
+  if (h < 15 || h >= 345) return 'レッド';
+  if (h < 45) return l < 0.35 ? 'ブラウン' : 'オレンジ';
+  if (h < 70) return 'イエロー';
+  if (h < 170) return 'グリーン';
+  if (h < 200) return 'シアン';
+  if (h < 255) return l < 0.3 ? 'ミッドナイト（濃紺）' : 'ブルー';
+  if (h < 290) return 'パープル';
+  return 'ピンク';
 }

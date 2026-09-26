@@ -1,10 +1,12 @@
 import { frameReady, meanLuma, toJpegDataUrl } from '../../camera/frame';
 import { apiBase } from '../../core/config';
 import type { Detection, Identification, OcrResult, SceneAnalysis } from '../../core/types';
-import { clamp, timeOfDayFor, uid } from '../../core/util';
-import type { FrameSource, IdentifyRequest, VisionCapabilities, VisionContext, VisionFrame, VisionProvider } from '../contracts';
+import { timeOfDayFor, uid } from '../../core/util';
+import type { FrameSource, IdentifyRequest, SearchService, VisionCapabilities, VisionContext, VisionFrame, VisionProvider } from '../contracts';
+import { IdentificationPipeline } from './identify/pipeline';
+import { CloudVision, LocalOCR, SearchVerification, localIdentification, localUnderstanding } from './identify/providers';
 import { postJson } from '../http';
-import { detectLang, kindFor, sanitize, statusFor } from './perception';
+import { detectLang, sanitize } from './perception';
 import type { FromWorker, ToWorker } from './worker/protocol';
 
 /**
@@ -101,17 +103,40 @@ abstract class WorkerVisionBase implements VisionProvider {
     return dets.map((d) => ({ ...d, timestamp: frame.capturedAt, source: 'local' as const }));
   }
 
-  /** On-device OCR (Shape Detection API), when the platform supports it. */
+  /** On-device OCR of a bitmap in the worker (Shape Detection API), when supported. The bitmap is consumed. */
+  async readBitmapText(bitmap: ImageBitmap): Promise<{ text: string; bbox: { x: number; y: number; w: number; h: number } }[]> {
+    await this.init();
+    if (!this.textSupported) {
+      bitmap.close();
+      return [];
+    }
+    return this.request({ type: 'text', id: ++this.seq, bitmap }, [bitmap]);
+  }
+
+  /** On-device OCR of the whole frame (sign scan). */
   protected async localText(frame: FrameSource): Promise<OcrResult> {
     await this.init();
     if (!this.textSupported || !frameReady(frame)) return { blocks: [], fullText: '', language: 'und' };
     const w = frame instanceof HTMLVideoElement ? frame.videoWidth : frame.width;
     const h = frame instanceof HTMLVideoElement ? frame.videoHeight : frame.height;
     const k = Math.min(1, 1280 / Math.max(w, h));
-    const bitmap = await createImageBitmap(frame, { resizeWidth: Math.round(w * k), resizeHeight: Math.round(h * k) });
-    const found = await this.request<{ text: string; bbox: { x: number; y: number; w: number; h: number } }[]>({ type: 'text', id: ++this.seq, bitmap }, [bitmap]);
+    const found = await this.readBitmapText(await createImageBitmap(frame, { resizeWidth: Math.round(w * k), resizeHeight: Math.round(h * k) }));
     const blocks = found.map((b) => ({ id: uid('txt'), text: b.text, bbox: b.bbox, lang: detectLang(b.text) }));
     return { blocks, fullText: blocks.map((b) => b.text).join('\n'), language: blocks[0]?.lang ?? 'und' };
+  }
+
+  protected abstract readonly pipe: IdentificationPipeline;
+
+  get pipeline() {
+    return this.pipe.where;
+  }
+
+  identify(req: IdentifyRequest): Promise<Identification> {
+    return this.pipe.run(req);
+  }
+
+  verifyIdentity(req: IdentifyRequest, current: Identification): Promise<Identification> {
+    return this.pipe.verifyIdentity(req, current);
   }
 
   /** Scene heuristics that need no network: luminance, counts, GPS. */
@@ -138,7 +163,6 @@ abstract class WorkerVisionBase implements VisionProvider {
     };
   }
 
-  abstract identify(req: IdentifyRequest): Promise<Identification>;
   abstract analyzeScene(frame: FrameSource, detections: Detection[], ctx: VisionContext): Promise<SceneAnalysis>;
   abstract ocr(frame: FrameSource, ctx: VisionContext): Promise<OcrResult>;
 
@@ -160,22 +184,21 @@ abstract class WorkerVisionBase implements VisionProvider {
  */
 export class OnDeviceVisionService extends WorkerVisionBase {
   readonly mode = 'ondevice' as const;
+  protected readonly pipe: IdentificationPipeline;
+
+  constructor(search: () => SearchService) {
+    super();
+    this.pipe = new IdentificationPipeline({
+      ocr: new LocalOCR(async (b) => (await this.readBitmapText(b)).map((x) => x.text), () => this.textSupported),
+      understanding: localUnderstanding,
+      identification: localIdentification,
+      verification: new SearchVerification(search),
+    });
+  }
   capabilities: VisionCapabilities = { detect: 'local', identify: 'local', scene: 'local', text: 'none', identifyNeedsCrop: false, maxInflightIdentify: 4 };
 
   protected onReady() {
     this.capabilities = { ...this.capabilities, text: this.textSupported ? 'local' : 'none' };
-  }
-
-  async identify({ detection: d }: IdentifyRequest): Promise<Identification> {
-    const kind = kindFor(d.category);
-    const at = performance.now();
-    if (kind === 'animal') return { status: statusFor(d.confidence), kind, name: d.displayName, confidence: d.confidence, source: 'local', at };
-    if (kind === 'food') {
-      const c = Math.min(0.7, d.confidence);
-      return { status: statusFor(c), kind, name: d.displayName, confidence: c, detail: 'クラウド接続で料理名を詳細識別', source: 'local', at };
-    }
-    // Class known, specific identity not available on-device.
-    return { status: 'detected', kind, name: '', confidence: d.confidence, detail: '詳細識別にはクラウド接続が必要', source: 'local', at };
   }
 
   async analyzeScene(frame: FrameSource, detections: Detection[], ctx: VisionContext): Promise<SceneAnalysis> {
@@ -187,74 +210,31 @@ export class OnDeviceVisionService extends WorkerVisionBase {
   }
 }
 
-async function bitmapToDataUrl(b: ImageBitmap): Promise<string> {
-  if (typeof OffscreenCanvas !== 'undefined') {
-    const c = new OffscreenCanvas(b.width, b.height);
-    c.getContext('2d')!.drawImage(b, 0, 0);
-    const blob = await c.convertToBlob({ type: 'image/jpeg', quality: 0.8 });
-    return new Promise((resolve) => {
-      const r = new FileReader();
-      r.onload = () => resolve(String(r.result));
-      r.readAsDataURL(blob);
-    });
-  }
-  const c = document.createElement('canvas');
-  c.width = b.width;
-  c.height = b.height;
-  c.getContext('2d')!.drawImage(b, 0, 0);
-  return c.toDataURL('image/jpeg', 0.8);
-}
-
 /**
  * CloudVisionProvider — hybrid. Real-time detection + tracking stay
  * on-device (latency, cost, privacy); only *stable targets* are sent once,
  * as a small crop, for tier-2 identification by a vision LLM behind the
  * gateway. Scene understanding and OCR run every few seconds.
  *
- *   POST /vision/identify { image(crop), label, category, bbox, geo, heading, nearby, scene } → Identification
+ *   POST /vision/ocr      { image(crop) } → text on the target
+ *   POST /vision/analyze  { image(crop), label, category, ocr, geo, heading, nearby, scene } → { features, candidates }
+ *   POST /vision/verify   { candidate, features } → Verification (official sources)
  *   POST /vision/scene    { image, detections, geo, heading, now } → SceneAnalysis (+ regions)
  *   POST /vision/ocr      { image } → OcrResult
  *
- * Server answers are re-validated here: status is recomputed from the
- * confidence thresholds and people are stripped of any identity.
+ * Server answers are re-validated here: status and name are graded from the
+ * candidates (gradeIdentity) and people are stripped of any identity.
  */
 export class RemoteVisionService extends WorkerVisionBase {
   readonly mode = 'real' as const;
+  private readonly cloud = new CloudVision();
+  protected readonly pipe = new IdentificationPipeline({
+    ocr: this.cloud.ocr,
+    understanding: this.cloud.understanding,
+    identification: this.cloud.identification,
+    verification: this.cloud.verification,
+  });
   readonly capabilities: VisionCapabilities = { detect: 'local', identify: 'cloud', scene: 'cloud', text: 'cloud', identifyNeedsCrop: true, maxInflightIdentify: 2 };
-
-  async identify(req: IdentifyRequest): Promise<Identification> {
-    const d = req.detection;
-    const image = req.crop ? await bitmapToDataUrl(req.crop) : null;
-    req.crop?.close();
-    const res = await postJson<Partial<Identification>>('/vision/identify', {
-      image,
-      label: d.label,
-      category: d.category,
-      bbox: d.bbox,
-      text: d.text,
-      geo: req.ctx.geo,
-      heading: req.ctx.heading,
-      nearby: req.nearby?.slice(0, 8).map((p) => ({ id: p.id, name: p.name, kind: p.kind })),
-      scene: req.scene?.summary,
-    });
-    const confidence = clamp(Number(res.confidence ?? 0), 0, 1);
-    const status = statusFor(confidence);
-    const id: Identification = {
-      status,
-      kind: res.kind ?? kindFor(d.category),
-      name: status === 'unknown' ? '' : String(res.name ?? ''),
-      nameEn: res.nameEn,
-      detail: res.detail,
-      confidence,
-      entityId: res.entityId,
-      officialUrl: res.officialUrl,
-      attributes: res.attributes,
-      candidates: res.candidates,
-      source: 'cloud',
-      at: performance.now(),
-    };
-    return sanitize({ ...d, identity: id }).identity!;
-  }
 
   async analyzeScene(frame: FrameSource, detections: Detection[], ctx: VisionContext): Promise<SceneAnalysis> {
     try {
