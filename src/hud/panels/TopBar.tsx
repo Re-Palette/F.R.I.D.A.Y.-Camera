@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { fmtTime } from '../../core/util';
+import { promptInstall, usePwa } from '../../pwa';
 import { deriveAIState, useAIState, useFriday } from '../../store/useFriday';
 import { useNow, useOrch } from '../hooks';
 import { Icon } from '../icons';
@@ -111,6 +112,7 @@ export function TopBar() {
       </div>
       <div className="topbar-row second">
         <AIStatus />
+        <InstallChip />
         {anyMock && (
           <button className="mock-badge only-auto" style={{ marginLeft: 'auto' }} onClick={() => orch.openSheet('system')}>
             {feed === 'demo' ? 'DEMO · MOCK DATA' : 'MOCK DATA'}
@@ -160,5 +162,21 @@ function QuickSettings() {
         {cam.exposure.toFixed(1)}
       </Q>
     </div>
+  );
+}
+
+/** Appears only when Chrome reports the app is installable. */
+function InstallChip() {
+  const { prompt, installed, dismissed } = usePwa();
+  if (!prompt || installed || dismissed) return null;
+  return (
+    <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: 4 }}>
+      <button className="chip orange" style={{ height: 22, fontFamily: 'var(--f-display)', fontWeight: 700, letterSpacing: '0.12em', fontSize: 10.5 }} onClick={() => void promptInstall()}>
+        ⤓ INSTALL APP
+      </button>
+      <button className="chip" style={{ height: 22, padding: '0 7px' }} onClick={() => usePwa.setState({ dismissed: true })} aria-label="閉じる">
+        ×
+      </button>
+    </span>
   );
 }

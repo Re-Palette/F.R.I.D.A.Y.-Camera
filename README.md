@@ -34,4 +34,17 @@ npm run build
 
 話しかける例: 「これ何？」→「いつできた？」→「夜に行くなら？」、「これについて調べて」、「明日の天気は？」、「写真撮って」、「10秒後に写真撮って」、「駅までナビして」、「これ翻訳して」、「去年撮った東京の夜景」、「インスタ用のキャプションを作って」
 
+## スマホにアプリとしてインストール（Android Chrome）
+
+PWA として、Chrome から「アプリをインストール」できます。フルスクリーンで起動し、オフラインでも立ち上がります。
+
+1. **HTTPS で配信する**（カメラの利用とインストールの両方に HTTPS が必要です）
+   - **GitHub Pages**: リポジトリの Settings → Pages → Source を **GitHub Actions** にすると、デフォルトブランチへの push のたびに `.github/workflows/deploy-pages.yml` がビルドして公開します（`https://<owner>.github.io/<repo>/`）。Actions タブから手動実行もできます。
+   - そのほかの静的ホスティング（Vercel / Netlify / Cloudflare Pages など）でも、`npm run build` の `dist/` をそのまま配信できます。サブパスで配信する場合は `VITE_BASE=/path/` を指定してビルドしてください。
+2. スマホの Chrome でその URL を開きます。
+3. 画面上部の **⤓ INSTALL APP**、または SYSTEM シート（ロゴをタップ）の **INSTALL** を押します。表示されない場合は、Chrome のメニュー（⋮）→「アプリをインストール」を選んでください。
+4. ホーム画面のアイコンから起動します。長押しすると「翻訳」「メモリー」のショートカットも使えます。
+
+オフライン時の動作: アプリ本体は Service Worker で事前キャッシュします。端末内検出用の MediaPipe モデルは初回に使ったときにキャッシュし、天気は最後に取得した値を表示します。
+
 設計の詳細は [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) を参照してください。

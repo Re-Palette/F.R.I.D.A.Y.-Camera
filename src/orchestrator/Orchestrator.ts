@@ -95,6 +95,12 @@ export class Orchestrator {
     setState({ bootPhase: 3 });
     await bootAnim;
     setState({ booted: true, bootPhase: 4 });
+    // PWA shortcuts (manifest `shortcuts`): ?mode=translate / ?sheet=memory
+    const q = new URLSearchParams(location.search);
+    const mode = q.get('mode') as CaptureMode | null;
+    if (mode && ['scan', 'photo', 'video', 'translate', 'nav'].includes(mode)) this.setMode(mode);
+    const sheet = q.get('sheet');
+    if (sheet === 'memory' || sheet === 'system') this.openSheet(sheet);
     this.running = true;
     void this.detectLoop();
     void this.worldLoop();

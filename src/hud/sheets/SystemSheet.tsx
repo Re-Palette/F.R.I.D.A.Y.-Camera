@@ -1,6 +1,7 @@
 import { apiBase, SERVICE_DESCRIPTIONS, SERVICE_MODES, SERVICE_NAMES } from '../../core/config';
 import type { HudDensity } from '../../core/types';
 import type { DemoScene } from '../../services/contracts';
+import { promptInstall, usePwa } from '../../pwa';
 import { useFriday } from '../../store/useFriday';
 import { useOrch } from '../hooks';
 import { Sheet } from './Sheet';
@@ -20,10 +21,28 @@ export function SystemSheet() {
   const scene = useFriday((s) => s.demoScene);
   const modes = useFriday((s) => s.serviceModes);
   const cameraError = useFriday((s) => s.cameraError);
+  const pwa = usePwa();
 
   return (
     <Sheet open={open} title="SYSTEM">
-      <h3 style={{ marginTop: 0 }}>HUD</h3>
+      <h3 style={{ marginTop: 0 }}>App</h3>
+      <div className="sys-row">
+        <span className="n">INSTALL</span>
+        <span className="d">
+          {pwa.installed
+            ? 'インストール済み（アプリとして起動中）'
+            : pwa.prompt
+              ? 'ホーム画面にアプリとして追加できます'
+              : 'Chrome のメニュー（⋮）→「アプリをインストール」/「ホーム画面に追加」'}
+        </span>
+        {pwa.prompt && !pwa.installed && (
+          <button className="btn primary" style={{ gridRow: '1 / span 2', gridColumn: 2 }} onClick={() => void promptInstall()}>
+            ⤓ INSTALL
+          </button>
+        )}
+      </div>
+
+      <h3>HUD</h3>
       <div className="sys-row">
         <span className="n">DENSITY</span>
         <span className="d">MIN: 最小限 / AUTO: 必要な時だけ / FULL: 全情報</span>
