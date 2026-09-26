@@ -1,0 +1,164 @@
+import { useEffect, useState } from 'react';
+import { fmtTime } from '../../core/util';
+import { deriveAIState, useAIState, useFriday } from '../../store/useFriday';
+import { useNow, useOrch } from '../hooks';
+import { Icon } from '../icons';
+
+const STATE_LABEL: Record<string, string> = {
+  BOOTING: 'BOOTING',
+  IDLE: 'STANDBY',
+  SCANNING: 'SCANNING',
+  ANALYZING: 'ANALYZING',
+  IDENTIFIED: 'IDENTIFIED',
+  TARGET_LOCKED: 'TARGET LOCKED',
+  LISTENING: 'LISTENING',
+  THINKING: 'THINKING',
+  SEARCHING: 'SEARCHING',
+  SPEAKING: 'SPEAKING',
+  ERROR: 'ERROR',
+};
+
+export function AIStatus({ compact = false }: { compact?: boolean }) {
+  const ai = useAIState();
+  const detail = useFriday((s) => {
+    const st = deriveAIState(s);
+    if (st === 'SEARCHING') return s.search?.detail ?? s.search?.stage.toUpperCase();
+    if (st === 'IDENTIFIED' || st === 'TARGET_LOCKED') return s.focus?.name;
+    if (st === 'LISTENING') return s.partial || undefined;
+    if (st === 'SCANNING') return `${s.detections.length} OBJECTS`;
+    return undefined;
+  });
+  const glyph =
+    ai === 'TARGET_LOCKED' ? (
+      <Icon.Lock size={12} />
+    ) : ai === 'IDENTIFIED' ? (
+      <Icon.Target size={12} />
+    ) : (
+      <span className="glyph">
+        <i />
+        <i />
+        <i />
+        <i />
+      </span>
+    );
+  return (
+    <span className="ai-state" data-s={ai} aria-live="polite">
+      {glyph}
+      {STATE_LABEL[ai]}
+      {!compact && detail && <span className="detail">· {detail}</span>}
+    </span>
+  );
+}
+
+function useBattery(): number | null {
+  const [lvl, setLvl] = useState<number | null>(null);
+  useEffect(() => {
+    const nav = navigator as Navigator & { getBattery?: () => Promise<{ level: number; addEventListener: (e: string, f: () => void) => void }> };
+    nav.getBattery?.().then((b) => {
+      setLvl(b.level);
+      b.addEventListener('levelchange', () => setLvl(b.level));
+    });
+  }, []);
+  return lvl;
+}
+
+export function TopBar() {
+  const orch = useOrch();
+  const now = useNow(10_000);
+  const battery = useBattery();
+  const feed = useFriday((s) => s.feed);
+  const cam = useFriday((s) => s.camera);
+  const recording = useFriday((s) => s.recording);
+  const anyMock = useFriday((s) => Object.values(s.serviceModes).some((m) => m === 'mock') || s.feed === 'demo');
+  const [quick, setQuick] = useState(false);
+
+  return (
+    <header className="topbar">
+      <div className="topbar-row">
+        <div className="brand" onClick={() => orch.openSheet('system')} role="button" aria-label="F.R.I.D.A.Y. system">
+          F<span className="brand-dot">.</span>R<span className="brand-dot">.</span>I<span className="brand-dot">.</span>D<span className="brand-dot">.</span>A
+          <span className="brand-dot">.</span>Y<span className="brand-dot">.</span>
+        </div>
+        <button className="feed-chips" onClick={() => setQuick((q) => !q)} aria-expanded={quick} aria-label="Camera settings">
+          <span className={`live-dot ${recording ? 'rec-dot' : ''}`} />
+          {recording ? 'REC' : feed === 'demo' ? 'DEMO' : 'LIVE'}
+          <span className="sep" />
+          {cam.resolution === '4k' ? '4K' : 'HD'}
+          <span className="sep" />
+          {cam.fps}FPS
+        </button>
+        <div className="status">
+          <svg width="16" height="12" viewBox="0 0 16 12" fill="currentColor" aria-hidden>
+            <rect x="0" y="8" width="2.6" height="4" rx=".5" />
+            <rect x="4.4" y="5.5" width="2.6" height="6.5" rx=".5" />
+            <rect x="8.8" y="3" width="2.6" height="9" rx=".5" />
+            <rect x="13.2" y="0" width="2.6" height="12" rx=".5" />
+          </svg>
+          {battery != null && (
+            <span className="num" style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }}>
+              <svg width="11" height="16" viewBox="0 0 11 16" fill="none" stroke="currentColor" aria-hidden>
+                <rect x="1" y="2.5" width="9" height="13" rx="1.5" />
+                <rect x="3.5" y="0.5" width="4" height="2" fill="currentColor" />
+                <rect x="2.5" y={4 + 10 * (1 - battery)} width="6" height={10 * battery} fill="currentColor" stroke="none" />
+              </svg>
+              {Math.round(battery * 100)}%
+            </span>
+          )}
+          <span className="num" style={{ fontSize: 16 }}>
+            {fmtTime(new Date(now))}
+          </span>
+        </div>
+      </div>
+      <div className="topbar-row second">
+        <AIStatus />
+        {anyMock && (
+          <button className="mock-badge only-auto" style={{ marginLeft: 'auto' }} onClick={() => orch.openSheet('system')}>
+            {feed === 'demo' ? 'DEMO · MOCK DATA' : 'MOCK DATA'}
+          </button>
+        )}
+      </div>
+      {quick && <QuickSettings />}
+    </header>
+  );
+}
+
+function QuickSettings() {
+  const orch = useOrch();
+  const cam = useFriday((s) => s.camera);
+  const caps = useFriday((s) => s.caps);
+  const set = (p: Parameters<typeof orch.setCamera>[0]) => void orch.setCamera(p);
+  const Q = ({ on, onClick, children, disabled }: { on?: boolean; onClick: () => void; children: React.ReactNode; disabled?: boolean }) => (
+    <button className={`chip ${on ? 'active' : ''}`} onClick={onClick} disabled={disabled} style={disabled ? { opacity: 0.4 } : undefined}>
+      {children}
+    </button>
+  );
+  return (
+    <div className="quick" role="toolbar" aria-label="Camera quick settings">
+      <Q on={cam.torch} onClick={() => set({ torch: !cam.torch })} disabled={!caps?.torch}>
+        <Icon.Bolt size={14} /> FLASH
+      </Q>
+      <Q on={cam.timerSec > 0} onClick={() => set({ timerSec: cam.timerSec === 0 ? 3 : cam.timerSec === 3 ? 10 : 0 })}>
+        <Icon.Timer size={14} /> {cam.timerSec ? `${cam.timerSec}S` : 'TIMER'}
+      </Q>
+      <Q on={cam.hdr} onClick={() => set({ hdr: !cam.hdr })}>
+        HDR
+      </Q>
+      <Q on={cam.night} onClick={() => set({ night: !cam.night })}>
+        <Icon.Moon size={14} /> NIGHT
+      </Q>
+      <Q on={cam.stabilization} onClick={() => set({ stabilization: !cam.stabilization })}>
+        <Icon.Stabilize size={14} /> STAB
+      </Q>
+      <Q on={cam.resolution === '4k'} onClick={() => set({ resolution: cam.resolution === '4k' ? '1080p' : '4k' })}>
+        {cam.resolution === '4k' ? '4K' : '1080P'}
+      </Q>
+      <Q on={cam.fps === 60} onClick={() => set({ fps: cam.fps === 60 ? 30 : 60 })}>
+        {cam.fps}FPS
+      </Q>
+      <Q on={cam.exposure !== 0} onClick={() => set({ exposure: cam.exposure >= 1 ? -1 : cam.exposure + 1 })}>
+        EV {cam.exposure > 0 ? '+' : ''}
+        {cam.exposure.toFixed(1)}
+      </Q>
+    </div>
+  );
+}

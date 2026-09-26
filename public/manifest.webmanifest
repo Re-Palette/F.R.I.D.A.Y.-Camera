@@ -1,0 +1,11 @@
+{
+  "name": "F.R.I.D.A.Y.",
+  "short_name": "FRIDAY",
+  "description": "AI vision assistant — see the world through an intelligent HUD.",
+  "start_url": "/",
+  "display": "fullscreen",
+  "orientation": "portrait",
+  "background_color": "#04070f",
+  "theme_color": "#04070f",
+  "icons": [{ "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+}
