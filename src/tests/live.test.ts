@@ -126,3 +126,12 @@ describe('Live identification', () => {
     agent.stop();
   });
 });
+
+describe('Live errors', () => {
+  it('stops retrying and explains billing / key problems', async () => {
+    const { fatalReason } = await import('../services/live/session');
+    expect(fatalReason('Your prepayment credits are depleted. Please go to AI Studio')).toContain('残高');
+    expect(fatalReason('API key not valid')).toContain('API キー');
+    expect(fatalReason('Internal error')).toBeNull();
+  });
+});

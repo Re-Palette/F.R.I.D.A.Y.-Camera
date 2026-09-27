@@ -106,6 +106,16 @@ export function setupMessage(model: string, o: LiveSetupOptions, resumeHandle?: 
   };
 }
 
+/** Close reasons that retrying can't fix → a user-facing explanation (null = retry). */
+export function fatalReason(reason: string): string | null {
+  const r = reason.toLowerCase();
+  if (/credit|prepay|billing|payment/.test(r)) return 'Gemini の残高（前払いクレジット）が不足しています。AI Studio（ai.studio/projects）でチャージしてください';
+  if (/quota|rate limit|resource.?exhausted/.test(r)) return 'Gemini の利用上限に達しました。しばらく待つか、AI Studio で上限・お支払いを確認してください';
+  if (/api key|api_key|permission|unauthori[sz]ed|forbidden|not allowed/.test(r)) return 'Gemini の API キーが無効か、権限がありません。Vercel の GEMINI_API_KEY を確認してください';
+  if (/model.*not (found|supported)|not found.*model/.test(r)) return 'Gemini Live のモデルが見つかりません（GEMINI_LIVE_MODEL を確認してください）';
+  return null;
+}
+
 async function decode(data: unknown): Promise<string> {
   if (typeof data === 'string') return data;
   if (typeof Blob !== 'undefined' && data instanceof Blob) return data.text();
@@ -232,6 +242,9 @@ export class GeminiLiveSession {
         this.ws = null;
         if (!setupDone) reject(new Error(`closed before setup (${e.code} ${e.reason || ''})`.trim()));
         if (!this.wanted) return this.setStatus('closed');
+        // Billing / key / permission problems won't fix themselves: say so once, in plain words.
+        const fatal = fatalReason(e.reason || '');
+        if (fatal) return this.fail(fatal);
         // 1000 from the server after goAway, 1011 on errors, 1006 on network loss: resume.
         this.scheduleReconnect(`${e.code} ${e.reason || ''}`.trim());
       };
