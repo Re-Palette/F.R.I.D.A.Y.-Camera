@@ -55,8 +55,12 @@ const WEATHER_TTL_MS = 10 * 60 * 1000;
 
 const TOD_TAG = { dawn: '夜明け', morning: '朝', day: '昼', dusk: '夕焼け', night: '夜' } as const;
 
-/** Questions Gemini Live answers itself (it sees the camera); app commands stay local. */
-const LIVE_INTENTS = new Set<Intent['kind']>(['identify', 'place_info', 'product_info', 'chat', 'scene', 'search']);
+/**
+ * With Gemini, everything conversational goes to it (it sees the camera, knows
+ * the context, can search). Only direct app controls stay local — they are
+ * instant and don't need a model.
+ */
+const LOCAL_INTENTS = new Set<Intent['kind']>(['capture_photo', 'record_start', 'record_stop', 'navigate', 'translate', 'ocr', 'memory_search', 'open_url', 'lock', 'unlock', 'social', 'switch_camera', 'zoom']);
 
 export class Orchestrator {
   services: ServiceRegistry;
@@ -365,6 +369,13 @@ export class Orchestrator {
         return this.setMode('nav');
       case 'mode_scan':
         return this.setMode('scan');
+      case 'end_conversation':
+        // Let the goodbye finish, then close the mic and go back to waiting for 「フライデー」.
+        setTimeout(() => {
+          this.wakeSession = false;
+          this.liveAgent?.stopMic();
+        }, 2500);
+        return;
     }
   }
 
@@ -372,8 +383,11 @@ export class Orchestrator {
   private liveHudContext(): string {
     const s = getState();
     const d = s.detections.find((x) => x.id === (s.lockedId ?? s.primaryId));
-    const here = this.services.location.mode === 'real' && s.geo ? [s.geo.area, s.geo.placeName].filter(Boolean).join(' ') : '';
-    const where = here ? ` 現在地（GPS）: ${here}。` : '';
+    // Place name when known; otherwise the coordinates (the model can place them).
+    const here =
+      this.services.location.mode === 'real' && s.geo ? [s.geo.area, s.geo.placeName].filter(Boolean).join(' ') || `緯度 ${s.geo.lat.toFixed(4)}, 経度 ${s.geo.lon.toFixed(4)}` : '';
+    const w = s.weather?.now;
+    const where = `${here ? ` 現在地（GPS）: ${here}。` : ''}${w && this.services.weather.mode === 'real' ? ` 現在の天気: ${w.condition} ${w.tempC}°C（明日: ${s.weather!.tomorrow.condition} ${s.weather!.tomorrow.minC}〜${s.weather!.tomorrow.maxC}°C）。` : ''}`;
     if (!d || !(this.vision instanceof LiveVisionService)) return where ? `[HUD 補足]${where}` : '';
     const idt = d.identity;
     const name = d.category === 'person' ? '人物' : idt && (idt.status === 'identified' || idt.status === 'possible') ? `${idt.name}（${Math.round(idt.confidence * 100)}%${idt.note ? `・${idt.note}` : ''}）` : d.displayName;
@@ -903,7 +917,9 @@ export class Orchestrator {
     const now = performance.now();
     if (s.partial || s.speaking || s.draft) this.lastVoiceActivity = now;
     if (this.wakeSession) {
-      const quiet = !s.speaking && !s.busy && !s.draft && now - this.lastVoiceActivity > 8000;
+      // With Gemini the mic stays open for a natural back-and-forth; the plain voice input is one-shot.
+      const window = this.liveAgent ? 25_000 : 8000;
+      const quiet = !s.speaking && !s.busy && !s.draft && now - this.lastVoiceActivity > window;
       if (quiet) {
         // Nobody spoke for a while after the answer: close the mic, wait for the name again.
         this.wakeSession = false;
@@ -986,7 +1002,7 @@ export class Orchestrator {
     const intent: Intent = (await this.services.llm.classify?.(text, ctx)) ?? classifyIntent(text, !!ctx.focus);
     this.push({ role: 'user', text, intent: intent.kind });
     const live = this.liveAgent;
-    if (live && LIVE_INTENTS.has(intent.kind)) {
+    if (live && !LOCAL_INTENTS.has(intent.kind)) {
       // Gemini Live sees the camera: it answers (by voice + transcript) with the HUD target as context.
       try {
         await live.ask(text, this.liveHudContext());

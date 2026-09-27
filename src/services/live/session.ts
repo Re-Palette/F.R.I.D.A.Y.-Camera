@@ -33,6 +33,8 @@ export interface FunctionDeclaration {
 export interface LiveSetupOptions {
   systemInstruction: string;
   tools?: FunctionDeclaration[];
+  /** Let the model look things up (Google Search grounding). */
+  googleSearch?: boolean;
   /** 'MEDIA_RESOLUTION_LOW' ≈ 64 tokens per frame. */
   mediaResolution?: 'MEDIA_RESOLUTION_LOW' | 'MEDIA_RESOLUTION_MEDIUM' | 'MEDIA_RESOLUTION_HIGH';
   voiceName?: string;
@@ -96,7 +98,9 @@ export function setupMessage(model: string, o: LiveSetupOptions, resumeHandle?: 
         ...(o.voiceName ? { speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: o.voiceName } } } } : {}),
       },
       systemInstruction: { parts: [{ text: o.systemInstruction }] },
-      ...(o.tools?.length ? { tools: [{ functionDeclarations: o.tools }] } : {}),
+      ...(o.tools?.length || o.googleSearch
+        ? { tools: [...(o.tools?.length ? [{ functionDeclarations: o.tools }] : []), ...(o.googleSearch ? [{ googleSearch: {} }] : [])] }
+        : {}),
       inputAudioTranscription: {},
       outputAudioTranscription: {},
       // Audio+video sessions are short without compression; keep a sliding window instead.

@@ -51,6 +51,8 @@ describe('Gemini Live session', () => {
     expect(m.contextWindowCompression).toEqual({ slidingWindow: {} });
     expect(m.sessionResumption).toEqual({ handle: 'h1' });
     expect(m.tools).toEqual([{ functionDeclarations: [{ name: 'f', description: 'd' }] }]);
+    const withSearch = setupMessage('gemini-3.8-live', { systemInstruction: 'x', tools: [{ name: 'f', description: 'd' }], googleSearch: true }).setup;
+    expect(withSearch.tools).toEqual([{ functionDeclarations: [{ name: 'f', description: 'd' }] }, { googleSearch: {} }]);
   });
 
   it('connects with the token, decodes binary frames and resumes after goAway', async () => {
@@ -108,7 +110,9 @@ describe('Live identification', () => {
     expect(agent.status).toBe('open');
     await tick(50);
     const sock = FakeSocket.all[0];
-    expect((sock.sent[0].setup as { tools: { functionDeclarations: { name: string }[] }[] }).tools[0].functionDeclarations.map((f) => f.name)).toEqual(['app_action']);
+    const tools = (sock.sent[0].setup as { tools: { functionDeclarations?: { name: string }[]; googleSearch?: object }[] }).tools;
+    expect(tools[0].functionDeclarations!.map((f) => f.name)).toEqual(['app_action']);
+    expect(tools[1]).toEqual({ googleSearch: {} }); // can look up current facts
     expect(sock.sent.filter((m) => m.realtimeInput)).toHaveLength(0); // no frames, no audio while idle
     agent.stop();
   });

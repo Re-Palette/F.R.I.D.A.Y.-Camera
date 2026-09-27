@@ -82,7 +82,7 @@ export class LiveAgent {
     this.convo = new GeminiLiveSession({
       getToken,
       createSocket,
-      setup: { systemInstruction: CONVERSATION_PROMPT, tools: [APP_ACTION], mediaResolution: 'MEDIA_RESOLUTION_MEDIUM' },
+      setup: { systemInstruction: CONVERSATION_PROMPT, tools: [APP_ACTION], googleSearch: true, mediaResolution: 'MEDIA_RESOLUTION_MEDIUM' },
     });
     this.player = new PcmPlayer((p) => this.events.emit('speaking', p));
     this.mic = new MicStreamer((pcm, level) => {
