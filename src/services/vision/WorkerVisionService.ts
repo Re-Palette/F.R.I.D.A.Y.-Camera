@@ -295,12 +295,12 @@ export class LiveVisionService extends WorkerVisionBase {
   private readonly live: LiveVision;
   protected readonly pipe: IdentificationPipeline;
   private frameGetter: () => { frame: FrameSource; w: number; h: number } | null = () => null;
-  capabilities: VisionCapabilities = { detect: 'local', identify: 'cloud', scene: 'local', text: 'none', identifyNeedsCrop: true, maxInflightIdentify: 2 };
+  capabilities: VisionCapabilities = { detect: 'local', identify: 'cloud', scene: 'local', text: 'none', identifyNeedsCrop: true, maxInflightIdentify: 3, cropSize: 768 };
 
   constructor(search: () => SearchService) {
     super();
     this.agent = new LiveAgent(() => this.frameGetter());
-    this.live = new LiveVision(this.agent);
+    this.live = new LiveVision();
     this.pipe = new IdentificationPipeline({
       fast: new LocalIdentification(async (b) => this.classifyBitmap(b)),
       ocr: new LocalOCR(async (b) => (await this.readBitmapText(b)).map((x) => x.text), () => this.textSupported),

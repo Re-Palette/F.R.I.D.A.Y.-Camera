@@ -83,6 +83,8 @@ export interface VisionCapabilities {
   identifyNeedsCrop: boolean;
   /** Max identifications in flight (cost / latency budget). */
   maxInflightIdentify: number;
+  /** Longest side of the target crop sent for identification (default 512 px). */
+  cropSize?: number;
 }
 
 /**

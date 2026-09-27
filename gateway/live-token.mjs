@@ -35,8 +35,27 @@ export async function createLiveToken({ apiKey, model = DEFAULT_LIVE_MODEL, fetc
 function cors(origin, allowed) {
   const ok = !!origin && allowed.includes(origin);
   return ok
-    ? { 'Access-Control-Allow-Origin': origin, 'Access-Control-Allow-Methods': 'POST, OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type, x-friday-access', 'Access-Control-Max-Age': '600', Vary: 'Origin' }
+    ? { 'Access-Control-Allow-Origin': origin, 'Access-Control-Allow-Methods': 'GET, POST, OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type, x-friday-access', 'Access-Control-Max-Age': '600', Vary: 'Origin' }
     : {};
+}
+
+/**
+ * Shared request guard for gateway endpoints: CORS allow-list, same-origin,
+ * optional access code. Returns { headers, json, reject } where `reject` is a
+ * ready Response when the request must not proceed.
+ */
+export function guard(request, env, methods = ['POST']) {
+  const origin = request.headers.get('origin') ?? '';
+  const allowed = (env.FRIDAY_ALLOWED_ORIGINS ?? '').split(',').map((s) => s.trim()).filter(Boolean);
+  const headers = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...cors(origin, allowed) };
+  const json = (status, body) => new Response(JSON.stringify(body), { status, headers });
+  if (request.method === 'OPTIONS') return { headers, json, reject: new Response(null, { status: 204, headers }) };
+  if (!methods.includes(request.method)) return { headers, json, reject: json(405, { error: 'method not allowed' }) };
+  const self = new URL(request.url).origin;
+  if (origin && origin !== self && !allowed.includes(origin)) return { headers, json, reject: json(403, { error: 'origin not allowed' }) };
+  if (env.FRIDAY_ACCESS_CODE && request.headers.get('x-friday-access') !== env.FRIDAY_ACCESS_CODE) return { headers, json, reject: json(401, { error: 'access code required' }) };
+  if (!env.GEMINI_API_KEY) return { headers, json, reject: json(503, { error: 'GEMINI_API_KEY is not configured on the gateway' }) };
+  return { headers, json, reject: null };
 }
 
 /**
@@ -44,18 +63,8 @@ function cors(origin, allowed) {
  * Workers, Deno, and in the Vite dev/preview middleware.
  */
 export async function handleLiveToken(request, env, fetchImpl = fetch) {
-  const origin = request.headers.get('origin') ?? '';
-  const allowed = (env.FRIDAY_ALLOWED_ORIGINS ?? '').split(',').map((s) => s.trim()).filter(Boolean);
-  const headers = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...cors(origin, allowed) };
-  const json = (status, body) => new Response(JSON.stringify(body), { status, headers });
-
-  if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers });
-  if (request.method !== 'POST') return json(405, { error: 'method not allowed' });
-  // Cross-origin callers must be allow-listed; same-origin requests carry no Origin or a matching one.
-  const self = new URL(request.url).origin;
-  if (origin && origin !== self && !allowed.includes(origin)) return json(403, { error: 'origin not allowed' });
-  if (env.FRIDAY_ACCESS_CODE && request.headers.get('x-friday-access') !== env.FRIDAY_ACCESS_CODE) return json(401, { error: 'access code required' });
-  if (!env.GEMINI_API_KEY) return json(503, { error: 'GEMINI_API_KEY is not configured on the gateway' });
+  const { json, reject } = guard(request, env);
+  if (reject) return reject;
   try {
     return json(200, await createLiveToken({ apiKey: env.GEMINI_API_KEY, model: env.GEMINI_LIVE_MODEL || DEFAULT_LIVE_MODEL, fetchImpl }));
   } catch (e) {

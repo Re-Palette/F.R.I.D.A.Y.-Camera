@@ -44,7 +44,9 @@ const LIVE_LABEL: Record<string, string> = {
 function LiveSection() {
   const orch = useOrch();
   const live = useFriday((s) => s.live);
-  const visionMode = useFriday((s) => s.serviceModes.vision);
+  const configured = useFriday((s) => s.serviceModes.vision);
+  // LIVE can also be on automatically (server has a Gemini key, camera in use).
+  const visionMode = live ? 'live' : configured;
   const [gw, setGw] = useState(gatewaySettings);
   const save = () => {
     saveGatewaySettings(gw);

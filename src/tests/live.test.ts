@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { LiveAgent } from '../services/live/agent';
 import { GeminiLiveSession, setupMessage } from '../services/live/session';
-import { identifyPrompt, parseIdentification } from '../services/live/tools';
+import { parseIdentification } from '../services/live/tools';
 
 /** In-memory stand-in for the Live WebSocket, driven by a tiny scripted server. */
 class FakeSocket {
@@ -97,32 +97,19 @@ describe('Live identification', () => {
     expect(parseIdentification({ candidates: [] })).toBeNull();
   });
 
-  it('describes where the target is', () => {
-    expect(identifyPrompt('T3', 'ノートPC', { x: 0.7, y: 0.1, w: 0.2, h: 0.15 })).toContain('画面上右');
-  });
-
-  it('asks one target per turn, in order, and resolves each from its tool call', async () => {
+  it('pre-connects the conversation and streams nothing while idle', async () => {
     FakeSocket.all = [];
-    const asked: string[] = [];
-    const agent = new LiveAgent(() => null, token, (url) =>
+    const agent = new LiveAgent(() => ({ frame: {} as never, w: 1280, h: 720 }), token, (url) =>
       new FakeSocket(url, (m, sock) => {
-        if (m.setup) return sock.push({ setupComplete: {} });
-        const text = (m.realtimeInput as { text?: string } | undefined)?.text;
-        if (!text?.startsWith('[HUD]')) return;
-        const id = text.match(/対象 (T\d+)/)![1];
-        asked.push(id);
-        sock.push({ toolCall: { functionCalls: [{ id: `c-${id}`, name: 'report_identification', args: { target_id: id, candidates: [{ name: `thing ${id}`, confidence: 0.8 }] } }] } });
-        setTimeout(() => sock.push({ serverContent: { turnComplete: true } }), 10);
+        if (m.setup) sock.push({ setupComplete: {} });
       }) as never,
     );
     await agent.start();
-    const box = { x: 0.1, y: 0.1, w: 0.2, h: 0.2 };
-    const [a, b] = await Promise.all([agent.identify('T1', null, '犬', box), agent.identify('T2', null, '猫', box)]);
-    expect(a?.candidates[0].name).toBe('thing T1');
-    expect(b?.candidates[0].name).toBe('thing T2');
-    expect(asked).toEqual(['T1', 'T2']); // serialized — the second never interrupted the first
-    const idSock = FakeSocket.all[0];
-    expect(idSock.sent.filter((m) => m.toolResponse).map((m) => (m.toolResponse as { functionResponses: { scheduling: string }[] }).functionResponses[0].scheduling)).toEqual(['SILENT', 'SILENT']);
+    expect(agent.status).toBe('open');
+    await tick(50);
+    const sock = FakeSocket.all[0];
+    expect((sock.sent[0].setup as { tools: { functionDeclarations: { name: string }[] }[] }).tools[0].functionDeclarations.map((f) => f.name)).toEqual(['app_action']);
+    expect(sock.sent.filter((m) => m.realtimeInput)).toHaveLength(0); // no frames, no audio while idle
     agent.stop();
   });
 });

@@ -4,6 +4,8 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { defineConfig, loadEnv, type Connect, type Plugin } from 'vite';
 // @ts-expect-error — plain ESM shared with the deployable gateway (gateway/)
 import { handleLiveToken } from './gateway/live-token.mjs';
+// @ts-expect-error — plain ESM shared with the deployable gateway (gateway/)
+import { handleVisionAnalyze } from './gateway/vision-analyze.mjs';
 import react from '@vitejs/plugin-react';
 import { VitePWA } from 'vite-plugin-pwa';
 
@@ -38,16 +40,22 @@ function mediapipeRuntime(): Plugin {
  */
 function liveGateway(): Plugin {
   const env = { ...loadEnv('development', process.cwd(), ''), ...process.env } as Record<string, string | undefined>;
-  const mount = (m: Connect.Server) =>
-    m.use('/api/live/token', async (req: IncomingMessage, res: ServerResponse) => {
-      const url = `http://${req.headers.host ?? 'localhost'}/api/live/token`;
-      const headers = new Headers();
-      for (const [k, v] of Object.entries(req.headers)) if (typeof v === 'string') headers.set(k, v);
-      const r: Response = await handleLiveToken(new Request(url, { method: req.method, headers }), env);
-      res.statusCode = r.status;
-      r.headers.forEach((v, k) => res.setHeader(k, v));
-      res.end(await r.text());
-    });
+  const route = (path: string, handler: (r: Request, e: typeof env) => Promise<Response>) => async (req: IncomingMessage, res: ServerResponse) => {
+    const url = `http://${req.headers.host ?? 'localhost'}${path}`;
+    const headers = new Headers();
+    for (const [k, v] of Object.entries(req.headers)) if (typeof v === 'string') headers.set(k, v);
+    const chunks: Buffer[] = [];
+    for await (const c of req) chunks.push(c as Buffer);
+    const body = req.method === 'GET' || req.method === 'HEAD' ? undefined : Buffer.concat(chunks);
+    const r: Response = await handler(new Request(url, { method: req.method, headers, body }), env);
+    res.statusCode = r.status;
+    r.headers.forEach((v, k) => res.setHeader(k, v));
+    res.end(await r.text());
+  };
+  const mount = (m: Connect.Server) => {
+    m.use('/api/live/token', route('/api/live/token', handleLiveToken));
+    m.use('/api/vision/analyze', route('/api/vision/analyze', handleVisionAnalyze));
+  };
   return { name: 'friday-live-gateway', configureServer: (s) => void mount(s.middlewares), configurePreviewServer: (s) => void mount(s.middlewares) };
 }
 

@@ -40,3 +40,45 @@ describe('gateway /live/token', () => {
     expect((await handle(req(), {}, f)).status).toBe(503);
   });
 });
+
+// @ts-expect-error — plain ESM shared with the deployable gateway
+import { handleVisionAnalyze, parseModelJson } from '../../gateway/vision-analyze.mjs';
+
+describe('gateway /vision/analyze (gemini-3.8-flash)', () => {
+  const handleV = handleVisionAnalyze as Handler;
+  const post = (body: unknown) => new Request('https://gw.example/api/vision/analyze', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const img = 'data:image/jpeg;base64,/9j/AAAA';
+
+  it('sends the crop with JSON output and falls back when a config field is unsupported', async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const f = (async (url: string, init: RequestInit) => {
+      const b = JSON.parse(init.body as string);
+      bodies.push(b);
+      expect(url).toBe('https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent');
+      if (b.generationConfig.mediaResolution) return new Response('Invalid JSON payload: unknown field mediaResolution', { status: 400 });
+      const out = { candidates: [{ name: 'Apple MacBook Air 13-inch', brand: 'Apple', confidence: 0.91 }], visible_text: ['MacBook Air'] };
+      return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: '```json\n' + JSON.stringify(out) + '\n```' }] } }] }), { status: 200 });
+    }) as unknown as typeof fetch;
+    const res = await handleV(post({ image: img, label: 'laptop', category: 'computer', ocr: ['MacBook Air'], area: '東京都渋谷区' }), { GEMINI_API_KEY: 'k' }, f);
+    const j = await res.json();
+    expect(res.status).toBe(200);
+    expect(j.result.candidates[0].name).toBe('Apple MacBook Air 13-inch');
+    expect(bodies).toHaveLength(2);
+    const parts = (bodies[1].contents as { parts: Record<string, unknown>[] }[])[0].parts;
+    expect(parts[0]).toEqual({ inlineData: { mimeType: 'image/jpeg', data: '/9j/AAAA' } });
+    expect(String(parts[1].text)).toContain('東京都渋谷区');
+    expect((bodies[1].generationConfig as Record<string, unknown>).responseMimeType).toBe('application/json');
+  });
+
+  it('reports readiness and rejects bad input without calling Google', async () => {
+    const never = (() => {
+      throw new Error('should not be called');
+    }) as unknown as typeof fetch;
+    const ready = await handleV(new Request('https://gw.example/api/vision/analyze'), { GEMINI_API_KEY: 'k' }, never);
+    expect(await ready.json()).toEqual({ ready: true, model: 'gemini-3.8-flash' });
+    const notReady = await handleV(new Request('https://gw.example/api/vision/analyze'), {}, never);
+    expect((await notReady.json()).ready).toBe(false);
+    expect((await handleV(post({ image: 'nope' }), { GEMINI_API_KEY: 'k' }, never)).status).toBe(400);
+    expect(parseModelJson('noise {"candidates":[]} tail')).toEqual({ candidates: [] });
+  });
+});

@@ -14,7 +14,7 @@ import { frameReady, toJpegDataUrl } from '../camera/frame';
 import { live, startMotion } from '../core/live';
 import { perf } from '../perf/metrics';
 import { trackRenderer } from '../hud/tracking/trackRenderer';
-import { saveOverrides, type ServiceMode, type ServiceName } from '../core/config';
+import { apiBase, gatewayHeaders, hasOverride, saveOverrides, type ServiceMode, type ServiceName } from '../core/config';
 import type {
   CameraSettings,
   CaptureMode,
@@ -66,6 +66,8 @@ export class Orchestrator {
   private unsubs: (() => void)[] = [];
   private liveUnsubs: (() => void)[] = [];
   private lastReverse: { lat: number; lon: number; at: number } | null = null;
+  /** The server can identify with Gemini (GEMINI_API_KEY set) — probed once at boot. */
+  private geminiReady = false;
   /** 「フライデー」 wake word; `wakeSession` = the current conversation was started by it. */
   readonly wake = new WakeWordListener();
   private wakeSession = false;
@@ -156,6 +158,7 @@ export class Orchestrator {
     this.sampler.start();
     void this.worldLoop();
     this.startWake();
+    void this.probeGemini();
   }
 
   dispose() {
@@ -285,7 +288,9 @@ export class Orchestrator {
   private swapVision(force = false) {
     const configured = getState().serviceModes.vision;
     const feed = this.camera.source;
-    const wanted = feed === 'demo' ? 'mock' : configured === 'mock' ? 'ondevice' : configured;
+    // With a camera: Gemini when the server has a key (unless the user chose a mode), else on-device.
+    const auto = this.geminiReady && !hasOverride('vision') ? 'live' : 'ondevice';
+    const wanted = feed === 'demo' ? 'mock' : configured === 'mock' || (configured === 'ondevice' && !hasOverride('vision')) ? auto : configured;
     if (this.vision.mode === wanted && !force) return;
     this.liveUnsubs.forEach((u) => u());
     this.liveUnsubs = [];
@@ -510,7 +515,7 @@ export class Orchestrator {
     return out;
   }
 
-  /** GPU crop of one target for identification (≤ 512 px). Only on demand. */
+  /** GPU crop of one target for identification (≤ 512 px, or the provider's cropSize). Only on demand. */
   private async cropTarget(d: Detection): Promise<ImageBitmap | null> {
     const { w, h } = this.camera.frameSize;
     if (!w || !h) return null;
@@ -519,7 +524,7 @@ export class Orchestrator {
     const sy = clamp((d.bbox.y - d.bbox.h * pad) * h, 0, h - 2);
     const sw = clamp(d.bbox.w * (1 + 2 * pad) * w, 2, w - sx);
     const sh = clamp(d.bbox.h * (1 + 2 * pad) * h, 2, h - sy);
-    const k = Math.min(1, 512 / Math.max(sw, sh));
+    const k = Math.min(1, (this.vision.capabilities.cropSize ?? 512) / Math.max(sw, sh));
     return createImageBitmap(this.camera.frame, sx, sy, sw, sh, { resizeWidth: Math.round(sw * k), resizeHeight: Math.round(sh * k), resizeQuality: 'medium' }).catch(() => null);
   }
 
@@ -858,6 +863,18 @@ export class Orchestrator {
 
   unlock() {
     setState({ lockedId: null, lockState: 'none' });
+  }
+
+  /** Is Gemini identification available on our server? If so, use it by default with the camera. */
+  private async probeGemini() {
+    try {
+      const res = await fetch(`${apiBase()}/vision/analyze`, { headers: gatewayHeaders() });
+      const j = res.ok ? ((await res.json()) as { ready?: boolean }) : null;
+      this.geminiReady = !!j?.ready;
+    } catch {
+      this.geminiReady = false;
+    }
+    if (this.geminiReady && this.camera.source === 'camera') this.swapVision();
   }
 
   // ─── Wake word 「フライデー」 ────────────────────────────────────────────

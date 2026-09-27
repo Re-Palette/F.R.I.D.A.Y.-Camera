@@ -1,24 +1,20 @@
 /**
- * LiveAgent — F.R.I.D.A.Y.'s connection to Gemini Live, as two sessions:
+ * LiveAgent — F.R.I.D.A.Y.'s spoken conversation over Gemini Live.
  *
- *   IDENTIFICATION session (always warm, never heard)
- *     target crop + "[HUD] identify T3" ──▶  ◀── report_identification(…) → HUD card
- *     One request in flight at a time (a new input would interrupt the current turn);
- *     any audio it produces is discarded.
- *
- *   CONVERSATION session (opened on the first question / mic, closed when idle)
- *     camera frames (1 / 1–2 s, ≤768 px) · mic PCM 16 kHz · typed questions ──▶
+ *   CONVERSATION session (pre-connected; streams only while you talk)
+ *     fresh camera frame + typed question, or mic PCM 16 kHz + 1 fps frames ──▶
  *     ◀── spoken answer (24 kHz) + transcript · app_action(take_photo …)
  *
- * Keeping them apart means identification never talks over (or gets mixed
- * into) the conversation, and an idle camera streams nothing.
+ * Object identification does NOT go through this socket: a speech model is
+ * the wrong tool for reading logos and model numbers. It uses the fast vision
+ * model (gemini-3.8-flash) via /vision/analyze — see live/vision.ts.
  */
 import { apiBase, gatewayHeaders } from '../../core/config';
 import { Emitter } from '../../core/events';
 import type { FrameSource } from '../contracts';
 import { MicStreamer, PcmPlayer, bytesToBase64 } from './audio';
 import { GeminiLiveSession, type FunctionCall, type LiveSessionOptions, type LiveStatus, type LiveToken } from './session';
-import { APP_ACTION, CONVERSATION_PROMPT, IDENTIFY_PROMPT, REPORT_IDENTIFICATION, identifyPrompt, parseIdentification, type LiveIdentification } from './tools';
+import { APP_ACTION, CONVERSATION_PROMPT } from './tools';
 
 export interface LiveAgentEvents extends Record<string, unknown> {
   /** Identification session status (the one that must be up for the HUD). */
@@ -61,34 +57,16 @@ async function encodeJpeg(src: CanvasImageSource | ImageBitmap, w: number, h: nu
   return bytesToBase64(new Uint8Array(await blob.arrayBuffer()));
 }
 
-interface Pending {
-  targetId: string;
-  image: string | null;
-  prompt: string;
-  timeoutMs: number;
-  resolve: (r: LiveIdentification | null) => void;
-  timer?: ReturnType<typeof setTimeout>;
-  done: boolean;
-  tries: number;
-}
-
-const CONVO_IDLE_MS = 120_000;
+const CONVO_IDLE_MS = 600_000;
 
 export class LiveAgent {
   readonly events = new Emitter<LiveAgentEvents>();
-  readonly idSession: GeminiLiveSession;
   readonly convo: GeminiLiveSession;
   private mic: MicStreamer;
   private player: PcmPlayer;
   private frameTimer: ReturnType<typeof setTimeout> | null = null;
   private encoding = false;
   private running = false;
-  // identification queue: one request in flight
-  private queue: Pending[] = [];
-  private inflight: Pending | null = null;
-  /** The answered turn hasn't sent turnComplete yet: the next request waits (≤1.5 s). */
-  private turnOpen = false;
-  private turnTimer: ReturnType<typeof setTimeout> | null = null;
   // conversation
   private lastInteraction = 0;
   private answering = false;
@@ -101,11 +79,6 @@ export class LiveAgent {
     getToken: () => Promise<LiveToken> = fetchLiveToken,
     createSocket?: LiveSessionOptions['createSocket'],
   ) {
-    this.idSession = new GeminiLiveSession({
-      getToken,
-      createSocket,
-      setup: { systemInstruction: IDENTIFY_PROMPT, tools: [REPORT_IDENTIFICATION], mediaResolution: 'MEDIA_RESOLUTION_MEDIUM' },
-    });
     this.convo = new GeminiLiveSession({
       getToken,
       createSocket,
@@ -117,22 +90,27 @@ export class LiveAgent {
       this.lastInteraction = performance.now();
       this.events.emit('level', level);
     });
-    this.wireIdentification();
     this.wireConversation();
   }
 
+  /** The conversation session is the one users feel (voice answers). */
   get status(): LiveStatus {
-    return this.idSession.status;
+    return this.convo.status;
   }
 
   get micOn(): boolean {
     return this.mic.active;
   }
 
-  /** Warm the identification session (the conversation one opens on first use). */
+  /**
+   * Pre-connect the conversation session so the first question is answered
+   * without a connection delay. Nothing is streamed until the user talks.
+   * (Identification goes through the fast vision model, not this socket.)
+   */
   start(): Promise<void> {
     this.running = true;
-    return this.idSession.connect();
+    this.lastInteraction = performance.now();
+    return this.convo.connect();
   }
 
   stop() {
@@ -141,9 +119,6 @@ export class LiveAgent {
     this.frameTimer = null;
     this.stopMic();
     this.player.close();
-    for (const p of [...this.queue, ...(this.inflight ? [this.inflight] : [])]) this.settle(p, null);
-    this.queue = [];
-    this.idSession.close();
     this.convo.close();
   }
 
@@ -152,7 +127,7 @@ export class LiveAgent {
   /** Typed (or locally recognised) question → spoken + transcribed answer. */
   async ask(text: string, hudContext?: string) {
     this.player.unlock();
-    await this.openConversation();
+    await this.openConversation(); // includes a fresh frame, so "これ" means what's on screen now
     this.interruptPlayback();
     this.userText = '';
     this.answering = true;
@@ -193,93 +168,11 @@ export class LiveAgent {
   private async openConversation() {
     this.lastInteraction = performance.now();
     await this.convo.connect();
-    // Show the model what the camera sees right now, then keep it up to date.
+    // Show the model what the camera sees right now (before the question), then keep it up to date.
+    if (this.frameTimer) clearTimeout(this.frameTimer);
+    this.frameTimer = null;
     this.lastFrameAt = 0;
-    this.scheduleFrame(0);
-  }
-
-  // ─── Identification ──────────────────────────────────────────────────────
-
-  /** Identify one target through the identification session. Null on timeout. */
-  async identify(targetId: string, crop: ImageBitmap | null, categoryJa: string, bbox: { x: number; y: number; w: number; h: number }, timeoutMs = 9000): Promise<LiveIdentification | null> {
-    const image = crop ? await encodeJpeg(crop, crop.width, crop.height, 512, 0.8) : null;
-    await this.idSession.connect();
-    return new Promise((resolve) => {
-      this.queue.push({ targetId, image, prompt: identifyPrompt(targetId, categoryJa, bbox), timeoutMs, resolve, done: false, tries: 0 });
-      this.pump();
-    });
-  }
-
-  /** One request per turn: a new input would interrupt the model's current turn. */
-  private pump(): void {
-    if (this.inflight || this.turnOpen || !this.queue.length || !this.idSession.open) return;
-    const p = this.queue.shift()!;
-    if (p.done) return this.pump();
-    this.inflight = p;
-    p.tries++;
-    clearTimeout(p.timer);
-    p.timer = setTimeout(() => this.settle(p, null), p.timeoutMs);
-    if (p.image) this.idSession.sendVideo(p.image);
-    this.idSession.sendText(p.prompt);
-  }
-
-  private settle(p: Pending, r: LiveIdentification | null) {
-    if (p.done) return;
-    p.done = true;
-    clearTimeout(p.timer);
-    this.queue = this.queue.filter((x) => x !== p);
-    if (this.inflight === p) {
-      this.inflight = null;
-      if (r) {
-        // Answered via the tool while the turn may still be running: let it end first,
-        // so the next request neither interrupts it nor inherits its turnComplete.
-        this.turnOpen = true;
-        if (this.turnTimer) clearTimeout(this.turnTimer);
-        this.turnTimer = setTimeout(() => this.endTurn(), 1500);
-      }
-    }
-    p.resolve(r);
-    this.pump();
-  }
-
-  private endTurn() {
-    this.turnOpen = false;
-    if (this.turnTimer) clearTimeout(this.turnTimer);
-    this.turnTimer = null;
-    this.pump();
-  }
-
-  private wireIdentification() {
-    const ev = this.idSession.events;
-    ev.on('status', (s) => {
-      this.events.emit('status', s);
-      if (s.status === 'open') this.pump();
-      if (s.status === 'error') for (const p of [...this.queue, ...(this.inflight ? [this.inflight] : [])]) this.settle(p, null);
-    });
-    ev.on('toolCall', (calls) => {
-      const responses = calls.map((c) => {
-        if (c.name !== 'report_identification') return { id: c.id, name: c.name, response: { error: 'unknown function' }, scheduling: 'SILENT' as const };
-        const r = parseIdentification(c.args);
-        const p = r ? ([this.inflight, ...this.queue].find((x) => x && x.targetId.toLowerCase() === r.targetId.toLowerCase()) ?? this.inflight) : null;
-        if (p && r) this.settle(p, r);
-        return { id: c.id, name: c.name, response: { ok: !!r }, scheduling: 'SILENT' as const };
-      });
-      this.idSession.sendToolResponse(responses);
-    });
-    // The turn ended without an answer (interrupted, or the model just talked): ask once more.
-    ev.on('turnComplete', () => {
-      if (this.turnOpen) return this.endTurn();
-      const p = this.inflight;
-      if (!p) return;
-      setTimeout(() => {
-        if (p.done || this.inflight !== p) return;
-        this.inflight = null;
-        if (p.tries < 2) this.queue.unshift(p);
-        else this.settle(p, null);
-        this.pump();
-      }, 600);
-    });
-    // Audio / transcripts from this session are never played or shown.
+    await this.sendFrame(true);
   }
 
   // ─── Conversation session events ─────────────────────────────────────────
@@ -292,6 +185,7 @@ export class LiveAgent {
   private wireConversation() {
     const ev = this.convo.events;
     ev.on('status', (s) => {
+      this.events.emit('status', s);
       if (s.status === 'error' || s.status === 'closed') this.stopMic();
     });
     ev.on('inputText', (t) => {
@@ -339,8 +233,9 @@ export class LiveAgent {
   }
 
   /**
-   * Conversation frames: 1 fps while talking, one every 2 s otherwise, none
-   * when hidden; after 2 idle minutes the conversation session is closed.
+   * Conversation frames: 1 fps while the user is talking to it, none when
+   * idle or hidden (no cost while you just look around). The connection
+   * stays warm; after 10 idle minutes it is closed.
    */
   private scheduleFrame(delay: number) {
     if (!this.running) return;
@@ -348,14 +243,15 @@ export class LiveAgent {
     this.frameTimer = setTimeout(() => void this.sendFrame(), delay);
   }
 
-  private async sendFrame() {
+  private async sendFrame(force = false) {
     this.frameTimer = null;
     const now = performance.now();
-    if (!this.mic.active && !this.answering && now - this.lastInteraction > CONVO_IDLE_MS) {
-      this.convo.close();
-      return; // reopened by the next question / mic
+    const talking = this.mic.active || this.answering || now - this.lastInteraction < 8000;
+    if (!talking && !force) {
+      if (now - this.lastInteraction > CONVO_IDLE_MS) this.convo.close(); // reopened by the next question / mic
+      return; // idle: stream nothing
     }
-    const interval = this.mic.active || this.answering ? 1000 : 2000;
+    const interval = 1000;
     try {
       const src = this.frameSource();
       const visible = typeof document === 'undefined' || document.visibilityState === 'visible';
@@ -375,7 +271,7 @@ export class LiveAgent {
       /* frame not ready — try next tick */
     } finally {
       this.encoding = false;
-      this.scheduleFrame(interval);
+      if (talking) this.scheduleFrame(interval);
     }
   }
 }

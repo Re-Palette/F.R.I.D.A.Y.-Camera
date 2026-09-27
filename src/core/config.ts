@@ -101,6 +101,11 @@ function readOverrides(): Partial<Record<ServiceName, ServiceMode>> {
   }
 }
 
+/** Did the user pick this service's mode themselves (SYSTEM sheet)? */
+export function hasOverride(name: ServiceName): boolean {
+  return readOverrides()[name] !== undefined;
+}
+
 export function saveOverrides(modes: Partial<Record<ServiceName, ServiceMode>>): void {
   try {
     globalThis.localStorage?.setItem(OVERRIDE_KEY, JSON.stringify(modes));
