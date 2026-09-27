@@ -41,11 +41,20 @@ class FakeRec {
   }
 }
 
+let listeners: Record<string, () => void> = {};
+
 describe('WakeWordListener', () => {
   beforeEach(() => {
     const g = globalThis as Record<string, unknown>;
     g.webkitSpeechRecognition = FakeRec;
-    g.document = { visibilityState: 'visible', addEventListener() {}, removeEventListener() {} };
+    listeners = {};
+    g.document = {
+      visibilityState: 'visible',
+      addEventListener(t: string, f: () => void) {
+        listeners[t] = f;
+      },
+      removeEventListener() {},
+    };
   });
 
   it('listens on-device when possible, fires with the command, and releases the mic when paused', () => {
@@ -64,5 +73,27 @@ describe('WakeWordListener', () => {
     w.setPaused(true);
     expect(rec.aborted).toBe(true);
     expect(w.state).toBe('paused');
+  });
+
+  it('on mobile: waits for a tap when refused before any gesture, and falls back from on-device', async () => {
+    const w = new WakeWordListener();
+    w.setEnabled(true);
+    let rec = FakeRec.last!;
+    // No on-device Japanese pack → retry with the platform recogniser.
+    rec.onerror?.({ error: 'service-not-allowed' });
+    rec.onend?.();
+    await new Promise((r) => setTimeout(r, 400));
+    rec = FakeRec.last!;
+    expect(rec.processLocally).toBe(false);
+    expect(rec.started).toBe(true);
+    // Refused because nobody touched the page yet → wait for a tap, don't give up.
+    rec.onerror?.({ error: 'not-allowed' });
+    rec.onend?.();
+    expect(w.state).toBe('tap');
+    const before = FakeRec.last;
+    listeners.pointerdown();
+    expect(FakeRec.last).not.toBe(before);
+    expect(FakeRec.last!.started).toBe(true);
+    expect(w.state).toBe('listening');
   });
 });

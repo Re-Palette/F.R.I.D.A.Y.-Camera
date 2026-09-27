@@ -112,7 +112,7 @@ export interface FridayState {
   /** Gemini Live connection (vision=live). */
   live: { status: string; detail?: string; mic: boolean } | null;
   /** Wake word 「フライデー」 listener state. */
-  wake: 'off' | 'listening' | 'paused' | 'unsupported' | 'denied';
+  wake: 'off' | 'listening' | 'paused' | 'tap' | 'unsupported' | 'denied';
   busy: Busy;
   search: SearchRun | null;
 

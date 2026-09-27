@@ -63,6 +63,13 @@ export function AIStatus({ compact = false }: { compact?: boolean }) {
 /** Shows that 「フライデー」 is being listened for. */
 function WakeChip() {
   const wake = useFriday((s) => s.wake);
+  if (wake === 'tap')
+    return (
+      <span className="wake-chip tap" title="画面をタップすると「フライデー」の待ち受けを開始します">
+        <i />
+        TAP → “FRIDAY”
+      </span>
+    );
   if (wake !== 'listening') return null;
   return (
     <span className="wake-chip" title="「フライデー」と呼ぶとマイクが起動します">

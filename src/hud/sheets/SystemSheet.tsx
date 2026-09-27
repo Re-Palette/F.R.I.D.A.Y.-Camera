@@ -8,7 +8,7 @@ import { useFriday } from '../../store/useFriday';
 import { useOrch } from '../hooks';
 import { Sheet } from './Sheet';
 
-const WAKE_LABEL = { off: 'オフ', listening: '待機中（「フライデー」と呼んでください）', paused: '一時停止中（マイク使用中 / 画面非表示）', unsupported: 'このブラウザは音声認識に非対応です', denied: 'マイクが許可されていません' } as const;
+const WAKE_LABEL = { off: 'オフ', listening: '待機中（「フライデー」と呼んでください）', paused: '一時停止中（マイク使用中 / 画面非表示）', tap: '画面をどこかタップすると待ち受けを開始します', unsupported: 'このブラウザは音声認識に非対応です', denied: 'マイクが許可されていません（アドレスバー左のアイコン → 権限 → マイク を許可）' } as const;
 
 /** 「フライデー」 wake word toggle. */
 function WakeRow() {

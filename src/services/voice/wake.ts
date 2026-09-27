@@ -29,7 +29,7 @@ export function matchWake(text: string): { hit: boolean; rest: string } {
 export interface WakeEvents extends Record<string, unknown> {
   /** Heard the name. `command` = the rest of the sentence, when complete. */
   wake: { command: string };
-  state: 'off' | 'listening' | 'paused' | 'unsupported' | 'denied';
+  state: 'off' | 'listening' | 'paused' | 'tap' | 'unsupported' | 'denied';
 }
 
 type LocalRec = SpeechRecognitionLike & { processLocally?: boolean; maxAlternatives?: number };
@@ -43,18 +43,37 @@ export class WakeWordListener {
   private fired = false;
   private restartTimer: ReturnType<typeof setTimeout> | null = null;
   private failures = 0;
+  /** Try on-device recognition first; drop it if the phone has no Japanese pack. */
+  private useLocal = true;
+  /** Mobile browsers often refuse to start recognition before the user touches the page. */
+  private needsGesture = false;
+  private denied = false;
   private onVisibility = () => this.sync();
+  private onGesture = () => {
+    if (!this.needsGesture) return;
+    this.needsGesture = false;
+    this.failures = 0;
+    this.sync(); // synchronously inside the tap, so the browser allows it
+  };
 
   get state(): WakeEvents['state'] {
     if (!this.supported) return 'unsupported';
     if (!this.enabled) return 'off';
+    if (this.denied) return 'denied';
+    if (this.needsGesture) return 'tap';
     return this.paused || document.visibilityState !== 'visible' ? 'paused' : 'listening';
   }
 
   setEnabled(on: boolean) {
     this.enabled = on && this.supported;
-    if (on) document.addEventListener('visibilitychange', this.onVisibility);
-    else document.removeEventListener('visibilitychange', this.onVisibility);
+    this.denied = false;
+    if (on) {
+      document.addEventListener('visibilitychange', this.onVisibility);
+      document.addEventListener('pointerdown', this.onGesture, true);
+    } else {
+      document.removeEventListener('visibilitychange', this.onVisibility);
+      document.removeEventListener('pointerdown', this.onGesture, true);
+    }
     this.sync();
   }
 
@@ -65,7 +84,7 @@ export class WakeWordListener {
   }
 
   private sync() {
-    const want = this.enabled && !this.paused && document.visibilityState === 'visible';
+    const want = this.enabled && !this.paused && !this.needsGesture && !this.denied && document.visibilityState === 'visible';
     if (want && !this.rec) this.start();
     if (!want && this.rec) this.stop();
     this.events.emit('state', this.state);
@@ -80,7 +99,7 @@ export class WakeWordListener {
     rec.interimResults = true;
     rec.maxAlternatives = 3;
     // Chrome can keep this on the device (no audio leaves the phone) when the language pack is present.
-    if ('processLocally' in rec) rec.processLocally = true;
+    if ('processLocally' in rec) rec.processLocally = this.useLocal;
     this.fired = false;
     let pending: { command: string; at: number } | null = null;
     let settle: ReturnType<typeof setTimeout> | null = null;
@@ -106,16 +125,24 @@ export class WakeWordListener {
       }
     };
     rec.onerror = (e) => {
-      if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
-        this.enabled = false;
-        this.events.emit('state', 'denied');
-      } else if (e.error === 'language-not-supported' && rec.processLocally) {
-        // No on-device Japanese pack: fall back to the platform recogniser.
-        (this as unknown as { noLocal: boolean }).noLocal = true;
+      const local = !!rec.processLocally;
+      if (local && (e.error === 'language-not-supported' || e.error === 'service-not-allowed')) {
+        // No on-device Japanese recogniser on this phone: use the platform one instead.
+        this.useLocal = false;
+      } else if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
+        // Usually "no user gesture yet" on mobile (or the permission prompt was dismissed):
+        // try again on the next tap. Only a second refusal after a tap counts as denied.
+        if (this.triedAfterGesture) this.denied = true;
+        else this.needsGesture = true;
+        this.events.emit('state', this.state);
       } else if (e.error !== 'no-speech' && e.error !== 'aborted') {
-        this.failures++;
+        this.failures++; // network / audio-capture (mic busy): back off and retry
       }
     };
+    rec.onresult = ((orig) => (e: Parameters<NonNullable<typeof orig>>[0]) => {
+      this.failures = 0; // it's working
+      orig?.(e);
+    })(rec.onresult);
     rec.onend = () => {
       if (this.rec !== rec) return;
       this.rec = null;
@@ -126,15 +153,19 @@ export class WakeWordListener {
       }
     };
     rec.onspeechstart = null;
-    if ((this as unknown as { noLocal?: boolean }).noLocal && 'processLocally' in rec) rec.processLocally = false;
+    this.triedAfterGesture = navigator.userActivation?.hasBeenActive ?? false;
     try {
       rec.start();
       this.rec = rec;
-      this.failures = 0;
     } catch {
+      // e.g. InvalidStateError while the previous session is still closing: retry shortly.
       this.failures++;
+      if (this.restartTimer) clearTimeout(this.restartTimer);
+      this.restartTimer = setTimeout(() => this.sync(), Math.min(10_000, 300 * 2 ** Math.min(this.failures, 5)));
     }
   }
+
+  private triedAfterGesture = false;
 
   private stop() {
     if (this.restartTimer) clearTimeout(this.restartTimer);
