@@ -10,7 +10,16 @@
 アプリ ══ WebSocket (access_token=token) ══▶ Gemini Live
 ```
 
-## Vercel にデプロイ
+## いちばん簡単: アプリと同じ Vercel プロジェクトで動かす
+
+アプリ本体を Vercel にデプロイしている場合（リポジトリ直下を Root にしたプロジェクト）、
+`api/live/token.js` が同じ URL で `/api/live/token` を提供します。**GATEWAY 欄は空欄のままで OK** です。
+
+1. Vercel のプロジェクト → Settings → Environment Variables に `GEMINI_API_KEY`（と、使うなら `FRIDAY_ACCESS_CODE`）を追加
+2. Deployments → 最新のデプロイの「⋯」→ Redeploy
+3. `https://<プロジェクト>.vercel.app` でアプリを開き、SYSTEM → Gemini Live → **LIVE ON**
+
+## 別プロジェクトとしてデプロイ（GitHub Pages 版のアプリから使う場合）
 
 1. Vercel で「Add New → Project」→ このリポジトリを選び、**Root Directory を `gateway`** にする
 2. Environment Variables:
