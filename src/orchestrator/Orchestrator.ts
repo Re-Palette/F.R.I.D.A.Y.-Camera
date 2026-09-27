@@ -22,6 +22,7 @@ import type {
   ChatMessage,
   Detection,
   EntityProfile,
+  GeoFix,
   HudDensity,
   LocationEstimate,
   PlaceInfo,
@@ -37,6 +38,9 @@ import { getState, setState, type SheetKind, type Toast } from '../store/useFrid
 import { evaluateHazards } from './hazards';
 import { IdentificationManager } from './identification';
 import { LiveVisionService } from '../services/vision/WorkerVisionService';
+import { BrowserLocationService, MockLocationService } from '../services/location';
+import { metersBetween, reverseGeocode } from '../services/location/reverse';
+import { MockWeatherService, OpenMeteoWeatherService } from '../services/weather';
 import type { LiveAgent } from '../services/live/agent';
 import { attachText, countObjects, detectLang, estimateLocation, geoAnchors, shownName } from '../services/vision/perception';
 import { classifyIntent } from './intents';
@@ -60,6 +64,7 @@ export class Orchestrator {
   private running = false;
   private unsubs: (() => void)[] = [];
   private liveUnsubs: (() => void)[] = [];
+  private lastReverse: { lat: number; lon: number; at: number } | null = null;
   private abort: AbortController | null = null;
   private candidate: { id: string; since: number } | null = null;
   private lastSeen = new Map<string, number>();
@@ -165,6 +170,7 @@ export class Orchestrator {
         const prev = getState().geo;
         setState({ geo: { ...geo, placeName: geo.placeName ?? prev?.placeName, area: geo.area ?? prev?.area } });
         if (!prev) void this.onFirstFix();
+        else if (this.services.location.mode === 'real') void this.maybeReverse(geo);
       }),
       loc.events.on('heading', (heading) => {
         // 60 Hz sensor → `live` for the frame loop; the store only gets ~8 Hz for text readouts.
@@ -223,8 +229,40 @@ export class Orchestrator {
 
   private onFeedChanged(feed: 'camera' | 'demo') {
     setState({ feed, caps: this.camera.caps, frameSize: this.camera.frameSize });
+    this.syncGeoServices(feed);
     this.swapVision();
     this.resetPerception();
+  }
+
+  /**
+   * A live camera is somewhere real: the scripted Odaiba position (and the
+   * weather / places made up for it) would be wrong. With the camera, a `mock`
+   * location upgrades to the device's GPS + compass and `mock` weather to
+   * Open-Meteo (both free, no key); the demo feed keeps its scripted world.
+   */
+  private syncGeoServices(feed: 'camera' | 'demo') {
+    const configured = getState().serviceModes;
+    const wantLoc = feed === 'camera' ? 'real' : configured.location;
+    const wantWeather = feed === 'camera' ? 'real' : configured.weather;
+    let changed = false;
+    if (this.services.location.mode !== wantLoc) {
+      this.services.location.stop();
+      this.services.location = wantLoc === 'real' ? new BrowserLocationService() : new MockLocationService();
+      changed = true;
+    }
+    if (this.services.weather.mode !== wantWeather) {
+      this.services.weather = wantWeather === 'real' ? new OpenMeteoWeatherService() : new MockWeatherService();
+      changed = true;
+    }
+    if (!changed) return;
+    // Forget the old world: the next fix re-runs place lookup, weather and nearby places.
+    setState({ geo: null, weather: null, location: null, pois: [] });
+    this.nearbyPlaces = [];
+    this.lastWeatherAt = 0;
+    this.lastPoiGeo = null;
+    this.lastReverse = null;
+    this.wire();
+    void this.services.location.start();
   }
 
   /**
@@ -317,10 +355,12 @@ export class Orchestrator {
   private liveHudContext(): string {
     const s = getState();
     const d = s.detections.find((x) => x.id === (s.lockedId ?? s.primaryId));
-    if (!d || !(this.vision instanceof LiveVisionService)) return '';
+    const here = this.services.location.mode === 'real' && s.geo ? [s.geo.area, s.geo.placeName].filter(Boolean).join(' ') : '';
+    const where = here ? ` 現在地（GPS）: ${here}。` : '';
+    if (!d || !(this.vision instanceof LiveVisionService)) return where ? `[HUD 補足]${where}` : '';
     const idt = d.identity;
     const name = d.category === 'person' ? '人物' : idt && (idt.status === 'identified' || idt.status === 'possible') ? `${idt.name}（${Math.round(idt.confidence * 100)}%${idt.note ? `・${idt.note}` : ''}）` : d.displayName;
-    return `[HUD 補足] ユーザーが指している対象: ${this.vision.targetId(d.id)} = ${name}。`;
+    return `[HUD 補足] ユーザーが指している対象: ${this.vision.targetId(d.id)} = ${name}。${where}`;
   }
 
   get visionMode() {
@@ -689,10 +729,28 @@ export class Orchestrator {
 
   private async onFirstFix() {
     const geo = getState().geo!;
-    const rev = await this.services.places.reverseGeocode(geo).catch(() => null);
-    if (rev) setState({ geo: { ...getState().geo!, placeName: rev.placeName, area: rev.area } });
+    if (this.services.location.mode === 'real' && this.services.places.mode === 'mock') await this.maybeReverse(geo, true);
+    else {
+      const rev = await this.services.places.reverseGeocode(geo).catch(() => null);
+      if (rev) setState({ geo: { ...getState().geo!, placeName: rev.placeName, area: rev.area } });
+    }
     void this.refreshWeather();
     void this.refreshPois(true);
+  }
+
+  /** Real position → place name (keyless OSM lookup): first fix, then after moving ~500 m, ≤ 1/min. */
+  private async maybeReverse(geo: GeoFix, force = false) {
+    if (this.services.places.mode !== 'mock') return; // a real places service already named it
+    const now = Date.now();
+    const last = this.lastReverse;
+    if (!force && last && (now - last.at < 60_000 || metersBetween(last, geo) < 500)) return;
+    this.lastReverse = { lat: geo.lat, lon: geo.lon, at: now };
+    const rev = await reverseGeocode(geo);
+    const cur = getState().geo;
+    if (rev && cur) {
+      setState({ geo: { ...cur, placeName: rev.placeName, area: rev.area } });
+      if (!force) void this.refreshWeather();
+    }
   }
 
   private async refreshWeather() {
@@ -700,7 +758,7 @@ export class Orchestrator {
     if (!geo) return;
     this.lastWeatherAt = Date.now();
     try {
-      const label = geo.area ? '東京' : geo.placeName ?? '現在地';
+      const label = geo.placeName ?? geo.area ?? '現在地';
       setState({ weather: await this.services.weather.report(geo, label) });
     } catch {
       this.lastWeatherAt = Date.now() - WEATHER_TTL_MS + 60_000;
@@ -713,6 +771,12 @@ export class Orchestrator {
     const moved = !this.lastPoiGeo || Math.abs(this.lastPoiGeo.lat - geo.lat) + Math.abs(this.lastPoiGeo.lon - geo.lon) > 0.0005;
     if (!force && !moved) return;
     this.lastPoiGeo = { lat: geo.lat, lon: geo.lon };
+    // Made-up places belong to the demo world, never around your real position.
+    if (this.services.location.mode === 'real' && this.services.places.mode === 'mock') {
+      this.nearbyPlaces = [];
+      setState({ pois: [] });
+      return;
+    }
     try {
       const places = await this.services.places.nearby(geo);
       this.nearbyPlaces = places;

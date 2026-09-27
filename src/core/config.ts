@@ -53,12 +53,12 @@ export const SERVICE_DESCRIPTIONS: Record<ServiceName, string> = {
   vision: 'LOCAL: 端末内検出 · CLOUD: 端末内検出 + クラウド識別 · LIVE: 端末内検出 + Gemini Live（識別・会話）',
   llm: 'Conversation & reasoning',
   search: 'Web search → rank → summarize',
-  weather: 'Open-Meteo (no key)',
+  weather: 'Open-Meteo（キー不要）· カメラ使用中は常に実データ',
   news: 'Contextual news feed',
   places: 'Places / POI / navigation',
   translate: 'Machine translation',
   voice: 'Web Speech STT / TTS',
-  location: 'GPS + compass',
+  location: 'GPS + コンパス · カメラ使用中は常に実際の現在地（デモ映像のみ台場）',
   memory: 'IndexedDB photo memory',
 };
 
