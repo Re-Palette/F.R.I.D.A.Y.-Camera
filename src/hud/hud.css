@@ -3210,3 +3210,27 @@ a.chip {
   color: var(--orange-hi);
   border-color: rgba(255, 140, 60, 0.6);
 }
+
+/* Wake word standby */
+.wake-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 20px;
+  margin-left: 8px;
+  padding: 0 7px;
+  font-family: var(--f-display);
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  color: var(--text-dim);
+  border: 1px solid rgba(205, 224, 248, 0.25);
+  border-radius: 10px;
+}
+.wake-chip i {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--cyan);
+  animation: blink 2.4s ease-in-out infinite;
+}

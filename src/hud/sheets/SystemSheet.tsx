@@ -8,6 +8,29 @@ import { useFriday } from '../../store/useFriday';
 import { useOrch } from '../hooks';
 import { Sheet } from './Sheet';
 
+const WAKE_LABEL = { off: 'オフ', listening: '待機中（「フライデー」と呼んでください）', paused: '一時停止中（マイク使用中 / 画面非表示）', unsupported: 'このブラウザは音声認識に非対応です', denied: 'マイクが許可されていません' } as const;
+
+/** 「フライデー」 wake word toggle. */
+function WakeRow() {
+  const orch = useOrch();
+  const wake = useFriday((s) => s.wake);
+  const on = wake !== 'off' && wake !== 'unsupported' && wake !== 'denied';
+  return (
+    <>
+      <h3>Voice</h3>
+      <div className="sys-row">
+        <span className="n">WAKE WORD</span>
+        <span className="d">「フライデー！」と呼ぶとマイクが起動 · {WAKE_LABEL[wake]}</span>
+        <span className="seg">
+          <button className={on ? 'on' : ''} disabled={wake === 'unsupported'} onClick={() => orch.setWakeEnabled(!on)}>
+            {on ? 'ON' : 'OFF'}
+          </button>
+        </span>
+      </div>
+    </>
+  );
+}
+
 const LIVE_LABEL: Record<string, string> = {
   idle: '未接続',
   connecting: '接続中…',
@@ -176,6 +199,7 @@ export function SystemSheet() {
         </div>
       )}
 
+      <WakeRow />
       <LiveSection />
 
       <h3>Services · Mock / Real</h3>

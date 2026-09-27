@@ -40,6 +40,7 @@ import { IdentificationManager } from './identification';
 import { LiveVisionService } from '../services/vision/WorkerVisionService';
 import { BrowserLocationService, MockLocationService } from '../services/location';
 import { metersBetween, reverseGeocode } from '../services/location/reverse';
+import { WakeWordListener, playWakeChime, saveWakeEnabled, wakeEnabledSetting } from '../services/voice/wake';
 import { MockWeatherService, OpenMeteoWeatherService } from '../services/weather';
 import type { LiveAgent } from '../services/live/agent';
 import { attachText, countObjects, detectLang, estimateLocation, geoAnchors, shownName } from '../services/vision/perception';
@@ -65,6 +66,11 @@ export class Orchestrator {
   private unsubs: (() => void)[] = [];
   private liveUnsubs: (() => void)[] = [];
   private lastReverse: { lat: number; lon: number; at: number } | null = null;
+  /** 「フライデー」 wake word; `wakeSession` = the current conversation was started by it. */
+  readonly wake = new WakeWordListener();
+  private wakeSession = false;
+  private lastVoiceActivity = 0;
+  private wakeTimer: ReturnType<typeof setInterval> | null = null;
   private abort: AbortController | null = null;
   private candidate: { id: string; since: number } | null = null;
   private lastSeen = new Map<string, number>();
@@ -149,9 +155,12 @@ export class Orchestrator {
     this.running = true;
     this.sampler.start();
     void this.worldLoop();
+    this.startWake();
   }
 
   dispose() {
+    this.wake.dispose();
+    if (this.wakeTimer) clearInterval(this.wakeTimer);
     this.running = false;
     this.sampler.stop();
     this.unsubs.forEach((u) => u());
@@ -189,6 +198,9 @@ export class Orchestrator {
       }),
       voice.events.on('final', (text) => {
         setState({ partial: '' });
+        this.lastVoiceActivity = performance.now();
+        // Woken by name: one question per wake, then back to waiting for 「フライデー」.
+        if (this.wakeSession) this.services.voice.stopListening();
         if (text) void this.ask(text);
       }),
       voice.events.on('error', (e) => {
@@ -846,6 +858,64 @@ export class Orchestrator {
 
   unlock() {
     setState({ lockedId: null, lockState: 'none' });
+  }
+
+  // ─── Wake word 「フライデー」 ────────────────────────────────────────────
+
+  private startWake() {
+    this.wake.events.on('state', (wake) => setState({ wake }));
+    this.wake.events.on('wake', ({ command }) => void this.onWake(command));
+    this.wake.setEnabled(wakeEnabledSetting());
+    // Pause while the microphone is in use; end a woken conversation once it goes quiet.
+    this.wakeTimer = setInterval(() => this.tickWake(), 500);
+  }
+
+  setWakeEnabled(on: boolean) {
+    saveWakeEnabled(on);
+    this.wake.setEnabled(on);
+    this.toast(on ? '「フライデー」で起動: ON' : '「フライデー」で起動: OFF');
+  }
+
+  private micInUse(): boolean {
+    const s = getState();
+    return s.listening || s.speaking || !!s.busy || s.recording || !!this.liveAgent?.micOn;
+  }
+
+  private tickWake() {
+    const s = getState();
+    const now = performance.now();
+    if (s.partial || s.speaking || s.draft) this.lastVoiceActivity = now;
+    if (this.wakeSession) {
+      const quiet = !s.speaking && !s.busy && !s.draft && now - this.lastVoiceActivity > 8000;
+      if (quiet) {
+        // Nobody spoke for a while after the answer: close the mic, wait for the name again.
+        this.wakeSession = false;
+        this.liveAgent?.stopMic();
+        if (s.listening) this.services.voice.stopListening();
+      }
+    }
+    this.wake.setPaused(this.wakeSession || this.micInUse());
+  }
+
+  private async onWake(command: string) {
+    this.wake.setPaused(true); // hand the microphone over
+    this.wakeSession = true;
+    this.lastVoiceActivity = performance.now();
+    playWakeChime();
+    if (getState().speaking) this.interrupt();
+    await sleep(250); // let the wake recogniser release the microphone first
+    const live = this.liveAgent;
+    if (command) {
+      // 「フライデー、これは何？」: the question came with the name.
+      await this.ask(command);
+      if (live && !live.micOn) await live.toggleMic().catch(() => undefined); // keep listening for a follow-up
+      return;
+    }
+    if (live) {
+      if (!live.micOn) await live.toggleMic().catch((e: Error) => this.toast(`MIC: ${e.message}`, 'warn'));
+    } else if (!getState().listening) {
+      this.services.voice.startListening('ja-JP');
+    }
   }
 
   // ─── Conversation ──────────────────────────────────────────────────────

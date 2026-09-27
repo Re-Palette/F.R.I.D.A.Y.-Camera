@@ -60,6 +60,18 @@ export function AIStatus({ compact = false }: { compact?: boolean }) {
   );
 }
 
+/** Shows that 「フライデー」 is being listened for. */
+function WakeChip() {
+  const wake = useFriday((s) => s.wake);
+  if (wake !== 'listening') return null;
+  return (
+    <span className="wake-chip" title="「フライデー」と呼ぶとマイクが起動します">
+      <i />
+      “FRIDAY”
+    </span>
+  );
+}
+
 /** Gemini Live connection state (vision = LIVE). Tap → SYSTEM. */
 function GeminiChip() {
   const orch = useOrch();
@@ -137,6 +149,7 @@ export function TopBar() {
       <div className="topbar-row second">
         <AIStatus />
         <GeminiChip />
+        <WakeChip />
         <InstallChip />
         {anyMock && (
           <button className="mock-badge only-auto" style={{ marginLeft: 'auto' }} onClick={() => orch.openSheet('system')}>

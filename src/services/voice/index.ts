@@ -13,7 +13,7 @@ interface SREvent {
   resultIndex: number;
   results: ArrayLike<SRResult>;
 }
-interface SpeechRecognitionLike {
+export interface SpeechRecognitionLike {
   lang: string;
   continuous: boolean;
   interimResults: boolean;
@@ -26,7 +26,7 @@ interface SpeechRecognitionLike {
   abort(): void;
 }
 
-function recognitionCtor(): (new () => SpeechRecognitionLike) | null {
+export function recognitionCtor(): (new () => SpeechRecognitionLike) | null {
   const g = globalThis as unknown as Record<string, unknown>;
   return (g.SpeechRecognition ?? g.webkitSpeechRecognition ?? null) as (new () => SpeechRecognitionLike) | null;
 }

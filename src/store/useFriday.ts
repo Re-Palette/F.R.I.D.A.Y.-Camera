@@ -111,6 +111,8 @@ export interface FridayState {
   speaking: boolean;
   /** Gemini Live connection (vision=live). */
   live: { status: string; detail?: string; mic: boolean } | null;
+  /** Wake word 「フライデー」 listener state. */
+  wake: 'off' | 'listening' | 'paused' | 'unsupported' | 'denied';
   busy: Busy;
   search: SearchRun | null;
 
@@ -210,6 +212,7 @@ export const useFriday = create<FridayState>(() => ({
   listening: false,
   speaking: false,
   live: null,
+  wake: 'off',
   busy: null,
   search: null,
   memoryItems: [],
