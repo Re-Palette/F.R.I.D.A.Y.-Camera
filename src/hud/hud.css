@@ -3238,3 +3238,97 @@ a.chip {
   color: var(--amber);
   border-color: rgba(255, 197, 61, 0.45);
 }
+
+/* ─── Phone HOME (touch phones, AUTO density) ───────────────────────────
+   Everything here is scoped to [data-home], which a mouse-driven PC never
+   gets — the PC / wide layout is untouched. One screen, nothing scrolls. */
+
+.feed-extra {
+  display: contents; /* identical layout wherever HOME is not active */
+}
+.app[data-home] .feed-extra,
+.app[data-home] .topbar .status,
+.app[data-home] .mock-badge {
+  display: none;
+}
+.app[data-home] .home-tl {
+  top: calc(var(--safe-t) + 92px);
+  right: calc(var(--safe-r) + var(--gutter));
+  width: auto;
+  gap: 8px;
+}
+.home-strip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  height: 30px;
+  padding: 0 12px;
+  font-size: 12.5px;
+  color: var(--text);
+  background: rgba(3, 10, 24, 0.5);
+  border: 1px solid var(--edge);
+  border-radius: 15px;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.home-strip > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+}
+.home-strip .hs-place {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--cyan);
+}
+.home-strip .hs-t {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text);
+}
+.home-strip .hs-wx .num {
+  font-weight: 600;
+}
+.home-strip .hs-c {
+  color: var(--text-dim);
+}
+.home-strip .hs-time {
+  color: var(--text-dim);
+}
+.app[data-home] .home-bottom {
+  left: calc(var(--safe-l) + var(--gutter));
+  right: calc(var(--safe-r) + var(--gutter));
+  bottom: calc(var(--safe-b) + 150px);
+  align-items: stretch;
+}
+/* Replies are short; show up to 3 lines, never a scroll box. */
+.app[data-home] .reply {
+  max-height: calc(1.6em * 3 + 34px);
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(#000 80%, transparent);
+  mask-image: linear-gradient(#000 80%, transparent);
+}
+@media (max-width: 360px) {
+  .home-strip .hs-c {
+    display: none;
+  }
+}
+/* Second row: status text gives way, the small chips always stay whole. */
+.app[data-home] .topbar-row.second > .ai-state {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+.app[data-home] .topbar-row.second > .wake-chip,
+.app[data-home] .topbar-row.second > .gemini-chip {
+  flex: none;
+  margin-left: 4px;
+}
+/* Labels drifting behind the voice bar shouldn't read through it. */
+.app[data-home] .utter {
+  background: rgba(3, 10, 24, 0.86);
+}

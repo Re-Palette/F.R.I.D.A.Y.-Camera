@@ -29,7 +29,8 @@ function selectItems(s: FridayState): string {
   if (!s.viewSize.w || (s.sheet && s.sheet !== 'intel') || s.mode === 'translate') return '';
   const primary = s.lockedId ?? s.primaryId;
   const wide = s.viewSize.w >= 900;
-  const budget = s.density === 'minimal' ? 1 : s.density === 'full' ? 12 : wide ? 5 : 3;
+  // Phone HOME: the locked/primary card plus one other label — the rest stay quiet markers.
+  const budget = s.density === 'minimal' ? 1 : s.density === 'full' ? 12 : wide ? 5 : s.home ? 2 : 3;
   const visible = s.detections.filter((d) => {
     if (d.id === primary) return true;
     if (s.density === 'minimal' || s.mode === 'nav') return false;

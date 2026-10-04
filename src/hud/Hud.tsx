@@ -20,6 +20,7 @@ import { ScenePanel } from './panels/ScenePanel';
 import { TopBar } from './panels/TopBar';
 import { TranslateBar } from './panels/TranslateBar';
 import { EnvPanel, ForecastPanel, WeatherChip } from './panels/Weather';
+import { HomeStrip } from './panels/HomeStrip';
 import { IntelSheet } from './sheets/IntelSheet';
 import { MemorySheet } from './sheets/MemorySheet';
 import { SearchSheet } from './sheets/SearchSheet';
@@ -28,16 +29,32 @@ import { SystemSheet } from './sheets/SystemSheet';
 import { PerfHud } from './PerfHud';
 import { Toasts } from './Toasts';
 
-function useWide() {
-  const q = '(min-width: 900px) and (min-aspect-ratio: 1/1)';
-  const [wide, setWide] = useState(() => matchMedia(q).matches);
+function useMedia(q: string) {
+  const [match, setMatch] = useState(() => matchMedia(q).matches);
   useEffect(() => {
     const m = matchMedia(q);
-    const on = () => setWide(m.matches);
+    const on = () => setMatch(m.matches);
     m.addEventListener('change', on);
     return () => m.removeEventListener('change', on);
-  }, []);
-  return wide;
+  }, [q]);
+  return match;
+}
+
+function useWide() {
+  return useMedia('(min-width: 900px) and (min-aspect-ratio: 1/1)');
+}
+
+/**
+ * Phone HOME: a touch phone (never a mouse-driven PC, whatever its window
+ * size) in the default AUTO density — one screen, essentials only, nothing
+ * that scrolls. FULL density still shows every panel.
+ */
+function useHome(wide: boolean) {
+  const touch = useMedia('(pointer: coarse)');
+  const density = useFriday((s) => s.density);
+  const home = !wide && touch && density !== 'full';
+  useEffect(() => useFriday.setState({ home }), [home]);
+  return home;
 }
 
 /**
@@ -70,12 +87,13 @@ function usePolicy() {
 
 export function Hud() {
   const wide = useWide();
+  const home = useHome(wide);
   const p = usePolicy();
   const density = useFriday((s) => s.density);
   const booted = useFriday((s) => s.booted);
 
   return (
-    <div className="app" data-density={density}>
+    <div className="app" data-density={density} data-home={home ? '' : undefined}>
       <FeedLayer />
       <div className="scan-sweep" />
       <Reticle />
@@ -87,7 +105,7 @@ export function Hud() {
       {booted && (
         <>
           <TopBar />
-          {wide ? <WideLayout p={p} /> : <PortraitLayout p={p} />}
+          {wide ? <WideLayout p={p} /> : home ? <HomeLayout p={p} /> : <PortraitLayout p={p} />}
           <CaptureBar />
         </>
       )}
@@ -139,6 +157,33 @@ function PortraitLayout({ p }: { p: Policy }) {
         ) : (
           <ObjectPanel show={p.object} compact ticker={p.info} />
         )}
+        <VoiceConsole />
+      </div>
+    </>
+  );
+}
+
+/**
+ * Phone HOME: top bar → one-line place · weather · time → the camera with the
+ * target card → voice bar + capture controls. Panels the user asks for
+ * (weather, navigation, translation) still appear in place, one at a time.
+ */
+function HomeLayout({ p }: { p: Policy }) {
+  const weatherAsked = p.env;
+  return (
+    <>
+      <div className="slot slot-tl home-tl">
+        <HomeStrip />
+        <TranslateBar />
+        <EnvPanel show={weatherAsked} />
+      </div>
+      {p.nav && (
+        <div className="slot slot-tr">
+          <Radar />
+        </div>
+      )}
+      <div className="slot home-bottom">
+        {weatherAsked ? <ForecastPanel show /> : p.nav ? <NavPanel /> : null}
         <VoiceConsole />
       </div>
     </>

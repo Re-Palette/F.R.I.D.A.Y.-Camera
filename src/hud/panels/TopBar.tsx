@@ -125,11 +125,13 @@ export function TopBar() {
         <button className="feed-chips" onClick={() => setQuick((q) => !q)} aria-expanded={quick} aria-label="Camera settings">
           <span className={`live-dot ${recording ? 'rec-dot' : ''}`} />
           {recording ? 'REC' : feed === 'demo' ? 'DEMO' : 'LIVE'}
-          <span className="sep" />
-          {cam.preview === '1080p' ? '1080P' : '720P'}
-          <span className="sep" />
-          <LiveFps fallback={cam.fps} />
-          FPS
+          <span className="feed-extra">
+            <span className="sep" />
+            {cam.preview === '1080p' ? '1080P' : '720P'}
+            <span className="sep" />
+            <LiveFps fallback={cam.fps} />
+            FPS
+          </span>
         </button>
         <div className="status">
           <svg width="16" height="12" viewBox="0 0 16 12" fill="currentColor" aria-hidden>
